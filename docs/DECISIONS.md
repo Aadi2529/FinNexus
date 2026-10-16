@@ -186,3 +186,76 @@ Use **Redis** as a high-speed, volatile cache to blacklist revoked JWT token IDs
 ### Consequences
 - **Positive:** Instantaneous token revocation on logout with zero degradation of database throughput.
 - **Negative:** Requires Redis service to be running alongside the backend. Local dev will provide a graceful fallback to an in-memory dictionary if Redis is offline during local offline unit testing.
+
+---
+
+## ADR-009: Composite Primary Key on UserRole Entity
+
+- **Status:** Accepted
+- **Date:** 2026-10-14
+- **Deciders:** Database Engineer, Senior Software Architect
+
+### Context
+In RBAC architectures, a user can have multiple roles. Without an enforced constraint, concurrent requests or administrative actions could result in duplicate user-role records, corrupting token payload generation and permission queries.
+
+### Decision
+Model `user_roles` using a composite primary key consisting of `(user_id, role_id)`.
+
+### Rationale
+- Enforces uniqueness at the physical database storage layer without requiring a synthetic surrogate UUID key.
+- Eliminates overhead of maintaining redundant surrogate indexes.
+- Supported seamlessly across PostgreSQL and SQLite test engines.
+
+### Consequences
+- **Positive:** Zero possibility of duplicate role mappings for a user.
+- **Negative:** Composite key joins must be used in raw queries, handled automatically by SQLAlchemy ORM relationships.
+
+---
+
+## ADR-010: Restrictive Deletion Policies on Author and Actor Foreign Keys
+
+- **Status:** Accepted
+- **Date:** 2026-10-14
+- **Deciders:** Database Engineer, Security Engineer
+
+### Context
+In financial platforms, notes, audit trails, and tasks represent legal and operational history. If a staff user account is removed, standard cascading deletes would silently destroy customer interaction notes, task assignments, and audit trails.
+
+### Decision
+1. For `customer_notes.author_id` and `tasks.assigned_to_id`, enforce `ON DELETE RESTRICT`. A staff account cannot be physically deleted while referenced by active interaction notes or operational tasks.
+2. For `audit_logs.actor_id` and `documents.verified_by_id`, enforce `ON DELETE SET NULL`. The audit log and document verification record are permanently preserved even if the staff user is archived or purged.
+
+### Rationale
+- Complies with financial compliance rules regarding immutable operational history.
+- Prevents silent data loss.
+
+### Consequences
+- **Positive:** Guaranteed preservation of compliance audit logs and customer interaction history.
+- **Negative:** User accounts must be soft-deleted or deactivated (`is_active = False`) rather than deleted by hard CASCADE.
+
+---
+
+## ADR-011: Database-Level Check Constraints for Numerical Financial Soundness
+
+- **Status:** Accepted
+- **Date:** 2026-10-14
+- **Deciders:** Database Engineer, QA Engineer
+
+### Context
+Application-layer validation (via Pydantic) can protect against API-level malformed payloads, but direct database access, data migrations, or scripts could introduce invalid financial data (e.g. negative monthly incomes or impossible CIBIL bureau scores).
+
+### Decision
+Embed explicit database check constraints on financial and document tables:
+- `chk_financial_profiles_monthly_income_positive`: `monthly_income >= 0`
+- `chk_financial_profiles_monthly_obligations_positive`: `monthly_obligations >= 0`
+- `chk_financial_profiles_cibil_score_range`: `cibil_score IS NULL OR (cibil_score >= 300 AND cibil_score <= 900)`
+- `chk_documents_file_size_positive`: `file_size_bytes > 0`
+
+### Rationale
+- Defense-in-depth: guarantees financial invariants at the persistence layer.
+- Enforced on all database writes, regardless of whether they originate from API controllers, migrations, or batch jobs.
+
+### Consequences
+- **Positive:** Uncompromised data integrity.
+- **Negative:** Database errors will be raised if invalid data is attempted; requires service layer to catch and wrap `IntegrityError`.
+

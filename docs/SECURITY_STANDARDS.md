@@ -29,7 +29,16 @@ FinanceFlow employs a dual-token JWT architecture with server-side revocation:
 - **Complexity Requirements:** Minimum 8 characters, containing at least one uppercase letter, one lowercase letter, one digit, and one special character.
 - **Rate Limiting:** IP and account-based throttling on `/api/v1/auth/login` (maximum 5 failed attempts per 5 minutes before temporary lock).
 
+### 1.3 Implemented Database-Level Protections (Phase 2 Baseline)
+- **Zero Plaintext Credentials:** The `users` table contains `hashed_password VARCHAR(255)`. No plaintext password column exists in any model.
+- **Token Hashing at Rest:** `refresh_tokens.token_hash` stores a SHA-256 digest (`VARCHAR(64)`), ensuring database leaks do not expose live session tokens.
+- **Audit Log Preservation:** `audit_logs.actor_id` uses `ON DELETE SET NULL`. Audit history can never be deleted by cascade when a user account is purged.
+- **Operational Attribution Preservation:** `customer_notes.author_id` and `tasks.assigned_to_id` use `ON DELETE RESTRICT` to prevent orphaned modifications.
+- **File Invariant Safeguards:** Document payloads are stored outside the database on disk or object store; only metadata, MIME types, and SHA-256 hashes are persisted in `documents`. Check constraint `chk_documents_file_size_positive` guarantees zero-byte corrupted records cannot be registered.
+- **Numerical Financial Bounds:** `financial_profiles` enforces `monthly_income >= 0`, `monthly_obligations >= 0`, and bureau range `cibil_score BETWEEN 300 AND 900` directly at the database engine level.
+
 ---
+
 
 ## 2. Server-Side Role-Based Access Control (RBAC)
 

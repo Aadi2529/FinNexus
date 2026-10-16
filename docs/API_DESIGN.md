@@ -69,23 +69,99 @@ All error responses return machine-readable error codes and correlation IDs:
 
 ## 2. Endpoint Catalog & Contracts
 
-### 2.1 Core & Health
+### 2.1 Core, Diagnostics & Health (IMPLEMENTED)
 
-#### `GET /api/v1/health`
-- **Description:** Verifies service health, database connectivity, and Redis responsiveness.
+#### `GET /`
+- **Description:** Root platform discovery endpoint returning basic service metadata, operational status, and interactive documentation links.
 - **Auth:** None (Public).
+- **Status:** **Implemented & Verified** (Phase 1).
 - **Response `200 OK`:**
   ```json
   {
+    "name": "FinanceFlow",
+    "version": "0.1.0",
+    "environment": "development",
+    "status": "online",
+    "documentation": {
+      "swagger": "/docs",
+      "redoc": "/redoc",
+      "openapi": "/api/v1/openapi.json"
+    },
+    "api_v1": "/api/v1"
+  }
+  ```
+
+#### `GET /api/v1/health/live`
+- **Description:** Liveness probe for load balancers and container orchestrators. Confirms FastAPI ASGI worker process is alive and processing requests without checking external databases.
+- **Auth:** None (Public).
+- **Status:** **Implemented & Verified** (Phase 1).
+- **Response `200 OK`:**
+  ```json
+  {
+    "status": "alive",
+    "service": "FinanceFlow",
+    "version": "0.1.0",
+    "environment": "development",
+    "timestamp": "2026-10-14T15:14:27.324760+00:00"
+  }
+  ```
+
+#### `GET /api/v1/health/ready`
+- **Description:** Readiness probe testing actual socket connections to PostgreSQL and Redis. Returns generic error messages without leaking database credentials or internal hosts.
+- **Auth:** None (Public).
+- **Status:** **Implemented & Verified** (Phase 1).
+- **Response `200 OK` (All Dependencies Ready):**
+  ```json
+  {
+    "status": "ready",
+    "timestamp": "2026-10-14T15:00:00.000000+00:00",
+    "dependencies": {
+      "database": "connected",
+      "redis": "connected"
+    }
+  }
+  ```
+- **Response `503 Service Unavailable` (Dependency Down):**
+  ```json
+  {
+    "status": "not_ready",
+    "timestamp": "2026-10-14T15:14:44.095040+00:00",
+    "dependencies": {
+      "database": "Database service is unavailable or non-responsive.",
+      "redis": "Redis cache service is unavailable or non-responsive."
+    }
+  }
+  ```
+
+#### `GET /api/v1/health`
+- **Description:** Comprehensive health summary reporting platform operational status and dependency connection health states.
+- **Auth:** None (Public).
+- **Status:** **Implemented & Verified** (Phase 1).
+- **Response `200 OK` (Healthy):**
+  ```json
+  {
     "status": "healthy",
-    "timestamp": "2026-10-15T08:00:00Z",
+    "timestamp": "2026-10-14T15:00:00.000000+00:00",
     "services": {
       "database": "connected",
       "redis": "connected"
     },
-    "version": "1.0.0"
+    "version": "0.1.0"
   }
   ```
+- **Response `503 Service Unavailable` (Degraded):**
+  ```json
+  {
+    "status": "degraded",
+    "timestamp": "2026-10-14T15:14:44.095040+00:00",
+    "services": {
+      "database": "Database service is unavailable or non-responsive.",
+      "redis": "Redis cache service is unavailable or non-responsive."
+    },
+    "version": "0.1.0"
+  }
+  ```
+
 
 ---
 
@@ -155,28 +231,88 @@ All error responses return machine-readable error codes and correlation IDs:
 
 ---
 
-### 2.4 Finance CRM (`/api/v1/crm`)
+### 2.4 Finance CRM & Client Management (`/api/v1/crm`)
 
-#### `GET /api/v1/crm/customers`
-- **Description:** List customers with filters (`search`, `status`, `assigned_officer_id`, `risk_tier`, `page`, `page_size`).
-- **Auth:** `ROLE_ADMIN`, `ROLE_MANAGER`, `ROLE_OFFICER`, `ROLE_AUDITOR`.
-
-#### `POST /api/v1/crm/customers`
-- **Description:** Create a new customer profile and associated financial record.
-- **Request Body:**
+#### `GET /api/v1/crm/clients` (or `/api/v1/crm/customers`)
+- **Description:** List clients with multi-field search (`search` matching first name, last name, concatenated full name, phone number, email, or PAN), pipeline status filter (`pipeline_status`), and server-side pagination.
+- **Auth:** `SUPER_ADMIN`, `ADMIN`, `EMPLOYEE`, `ROLE_ADMIN`, `ROLE_MANAGER`, `ROLE_OFFICER`, `ROLE_AUDITOR`.
+- **Query Parameters:**
+  - `search` (optional string): Query term matched against name, normalized phone, email, and PAN.
+  - `pipeline_status` (optional string): Filter by status (`NEW_LEAD`, `CONTACTED`, `KYC_SUBMITTED`, `DOCUMENT_VERIFICATION`, `UNDERWRITING`, `APPROVED`, `DISBURSED`, `REJECTED`, `INACTIVE`).
+  - `page` (optional integer, default 1): 1-indexed page number.
+  - `page_size` (optional integer, default 20, max 100): Records per page.
+  - `paginate` (optional boolean): When `true` or when `page` is provided, returns paginated envelope `{ items, pagination }`. If `false` and no `page` is provided, returns flat array for backward compatibility.
+- **Headers Returned:**
+  - `X-Total-Count`: Total number of matching records in database.
+  - `X-Total-Pages`: Total number of pages.
+  - `X-Current-Page`: Current page index.
+  - `X-Page-Size`: Page size limit.
+- **Response `200 OK` (Paginated Envelope):**
   ```json
   {
-    "first_name": "Rahul",
-    "last_name": "Sharma",
-    "email": "rahul.sharma@example.com",
-    "phone": "+919876543210",
-    "pan_number": "ABCDE1234F",
-    "financial_profile": {
-      "employment_type": "SALARIED",
-      "monthly_income": 85000.00,
-      "monthly_obligations": 20000.00,
-      "cibil_score": 765
+    "items": [
+      {
+        "id": "e7c6d1a2-3b4c-5d6e-7f8a-9b0c1d2e3f4a",
+        "first_name": "Priya",
+        "last_name": "Patel",
+        "email": "priya.patel@example.com",
+        "phone": "+91 9876543210",
+        "pan_number": "ABCDE1234F",
+        "pipeline_status": "KYC_SUBMITTED",
+        "assigned_officer_id": null,
+        "risk_tier": "LOW",
+        "created_at": "2026-10-15T12:00:00Z",
+        "active_work_orders_count": 2,
+        "total_work_orders_count": 3
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "page_size": 20,
+      "total_items": 1,
+      "total_pages": 1,
+      "has_next": false,
+      "has_prev": false
     }
+  }
+  ```
+
+#### `POST /api/v1/crm/clients` (or `/api/v1/crm/customers`)
+- **Description:** Register a new CRM client and initialize their financial profile.
+- **Auth:** `SUPER_ADMIN`, `ADMIN`, `EMPLOYEE`.
+- **Validation Rules:**
+  - `first_name`: Required, 1-50 characters.
+  - `last_name`: Required, 1-50 characters.
+  - `email`: Required, valid email format, must be unique across clients.
+  - `phone`: Required, 10-15 digits, E.164 or standard mobile format.
+  - `pan_number`: Optional, exactly 10 uppercase alphanumeric chars (e.g., `ABCDE1234F`), must be unique if provided.
+- **Response `201 Created`:** Returns created `CustomerResponse` with generated UUID and timestamp.
+
+#### `PUT /api/v1/crm/clients/{id}` (or `/api/v1/crm/customers/{id}`)
+- **Description:** Update an existing client's contact details, pipeline status, or financial profile attributes.
+- **Auth:** `SUPER_ADMIN`, `ADMIN`, `EMPLOYEE`.
+- **Validation:** Enforces uniqueness of email and PAN excluding the client being updated. Recalculates risk tier if financial profile values are modified.
+- **Response `200 OK`:** Returns updated `CustomerResponse`.
+
+#### `DELETE /api/v1/crm/clients/{id}` (or `/api/v1/crm/customers/{id}`)
+- **Description:** Safely delete an unencumbered client. Enforces strict enterprise foreign key retention rules.
+- **Auth:** `SUPER_ADMIN`, `ADMIN` (Employees receive `403 Forbidden`).
+- **Dependency Retention Policy:**
+  - If the client has associated `WorkOrder` records, deletion is **BLOCKED** with `HTTP 400 Bad Request` specifying the number of linked work orders.
+  - If the client has active `Task` records (status `PENDING` or `IN_PROGRESS`), deletion is **BLOCKED** with `HTTP 400 Bad Request`.
+  - Only unencumbered clients can be deleted, preventing orphaned operational records and audit gaps.
+- **Response `200 OK` (Clean Deletion):**
+  ```json
+  {
+    "status": "success",
+    "message": "Client deleted successfully",
+    "deleted_id": "e7c6d1a2-3b4c-5d6e-7f8a-9b0c1d2e3f4a"
+  }
+  ```
+- **Response `400 Bad Request` (Retention Block):**
+  ```json
+  {
+    "detail": "Cannot delete client with 2 associated work orders. Reassign, complete, or archive work orders first."
   }
   ```
 
@@ -185,12 +321,6 @@ All error responses return machine-readable error codes and correlation IDs:
 
 #### `POST /api/v1/crm/customers/{id}/notes`
 - **Description:** Attach an interaction note to a customer profile.
-- **Request Body:**
-  ```json
-  {
-    "content": "Customer submitted salary slips for past 3 months. KYC verified."
-  }
-  ```
 
 #### `GET /api/v1/crm/tasks`
 - **Description:** List tasks assigned to current officer or filtered by customer/status.

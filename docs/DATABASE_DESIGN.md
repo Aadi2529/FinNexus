@@ -308,4 +308,20 @@ To guarantee continuous schema reproducibility across development, CI, and deplo
 2. All schema changes must be authored as versioned Alembic migration scripts in `backend/alembic/versions/`.
 3. Every migration file must implement both `upgrade()` and `downgrade()` functions.
 4. Downgrade procedures must be tested locally before submitting changes to ensure reversible migrations.
-5. Migration naming convention: `YYYYMMDD_HHMM_<sequential_num>_<short_slug>.py` (e.g., `20261015_1000_001_initial_schema.py`).
+5. Migration naming convention: `YYYYMMDD_HHMM_<rev>_<short_slug>.py`.
+
+### 4.1 Baseline Migration History
+- **Revision ID:** `fad623e5f3cb`
+- **File:** [`backend/alembic/versions/20261014_1633_fad623e5f3cb_initial_schema.py`](file:///d:/project/backend/alembic/versions/20261014_1633_fad623e5f3cb_initial_schema.py)
+- **Status:** **Implemented & Verified** (Static SQL Generation Verified)
+- **Tables Provisioned:** `roles`, `users`, `user_roles`, `refresh_tokens`, `customers`, `financial_profiles`, `customer_notes`, `tasks`, `documents`, `audit_logs` (10 tables, 17 indexes, 4 check constraints, 12 foreign key constraints).
+- **Execution Commands:**
+  ```powershell
+  # Offline static SQL inspection:
+  alembic upgrade --sql base:head
+  alembic downgrade --sql head:base
+
+  # Online live database migration (when PostgreSQL is connected):
+  alembic upgrade head
+  ```
+

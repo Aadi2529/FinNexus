@@ -51,6 +51,31 @@ FinanceFlow adopts a rigorous testing pyramid to ensure that financial accuracy,
   3. **Financial Toolkit Flow:** Officer navigates to EMI Calculator -> inputs principal, interest, and tenure -> generates amortization schedule -> exports or verifies output table.
   4. **Document Vault Flow:** Officer uploads sample KYC PDF -> verifies document appears in pending list -> Auditor logs in and approves the document.
 
+### 2.4 Implemented Foundation Tests (Phase 1 Baseline)
+- **Location:** `backend/tests/test_health.py`
+- **Execution Command:** `pytest tests/test_health.py` (from `backend/`)
+- **Verified Coverage:** Root discovery, unconditional liveness, readiness with mocked dependencies, and CORS headers.
+- **Pass Count:** 8 of 8 tests passing (`100%`). Execution time: 0.05 seconds.
+
+### 2.5 Implemented Database & Migration Tests (Phase 2 Baseline)
+- **Location:** `backend/tests/test_database_models.py` and `backend/tests/test_migrations.py`
+- **Execution Command:** `pytest` (from `backend/`)
+- **Verified Coverage:**
+  1. `test_model_metadata_registration`: Verifies all 10 core tables are present in `Base.metadata`.
+  2. `test_column_definitions_and_monetary_types`: Verifies `Numeric(14, 2)` monetary columns and timezone-aware timestamps.
+  3. `test_foreign_key_ondelete_policies`: Verifies `CASCADE`, `SET NULL`, and `RESTRICT` rules across all relationships.
+  4. `test_unique_constraints_and_indexes`: Verifies unique constraints on emails, PAN numbers, token hashes, and composite audit indexes.
+  5. `test_duplicate_user_role_prevention`: Verifies composite PK on `user_roles` strictly prevents duplicate role assignments.
+  6. `test_financial_profile_check_constraints`: Verifies database-level check constraints for non-negative incomes/obligations and CIBIL score bounds (300-900).
+  7. `test_document_file_size_check_constraint`: Verifies check constraint on `file_size_bytes > 0`.
+  8. `test_no_accidental_schema_creation_on_startup`: Verifies that importing the application never invokes `create_all()`.
+  9. `test_migration_revision_discovery`: Verifies Alembic script directory discovers baseline revision `fad623e5f3cb`.
+  10. `test_alembic_offline_sql_generation`: Compiles full upgrade and downgrade static SQL for PostgreSQL; verifies DDL for all 10 tables.
+  11. `test_disposable_postgresql_migration_lifecycle`: Integration test for disposable PostgreSQL databases; skips cleanly when PostgreSQL authentication is unavailable.
+- **Total Suite Result:** 18 passed, 1 skipped (live PostgreSQL authentication on host) in 0.62 seconds.
+
+
+
 ---
 
 ## 3. Test Data Management & Fixtures

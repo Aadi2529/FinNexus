@@ -1,0 +1,28 @@
+{
+  "name": "finnexus-ecosystem",
+  "private": true,
+  "version": "0.4.0",
+  "description": "FinNexus Unified Enterprise Platform - Monorepo with 4 Independent Frontend Applications and Shared FastAPI Backend",
+  "workspaces": [
+    "dashboard",
+    "crm",
+    "toolkit",
+    "insurance-engine"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "dev": "concurrently -n \"DASH,CRM,TOOL,INS\" -c \"blue,emerald,teal,cyan\" \"npm run dev:dashboard\" \"npm run dev:crm\" \"npm run dev:toolkit\" \"npm run dev:insurance\"",
+    "dev:dashboard": "npm run dev --workspace=dashboard",
+    "dev:crm": "npm run dev --workspace=crm",
+    "dev:toolkit": "npm run dev --workspace=toolkit",
+    "dev:insurance": "npm run dev --workspace=insurance-engine",
+    "build": "npm run build --workspace=dashboard && npm run build --workspace=crm && npm run build --workspace=toolkit && npm run build --workspace=insurance-engine",
+    "build:dashboard": "npm run build --workspace=dashboard",
+    "build:crm": "npm run build --workspace=crm",
+    "build:toolkit": "npm run build --workspace=toolkit",
+    "build:insurance": "npm run build --workspace=insurance-engine"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

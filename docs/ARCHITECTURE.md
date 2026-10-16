@@ -90,111 +90,75 @@ graph TD
 
 ### 3.1 Backend Application Layout (`backend/`)
 
+The backend codebase cleanly separates foundational infrastructure from modular domain plugins:
+
 ```
 backend/
 ├── app/
-│   ├── core/                      # Shared infrastructure & cross-cutting concerns
-│   │   ├── config.py              # Pydantic BaseSettings loading from .env
-│   │   ├── database.py            # SQLAlchemy engine, sessionmaker, Base class
-│   │   ├── security.py            # Password hashing, JWT creation & verification
-│   │   ├── exceptions.py          # Custom domain exceptions & HTTP handlers
-│   │   ├── logging.py             # Structured JSON logging configuration
-│   │   └── redis.py               # Redis connection pool & blacklist helpers
-│   ├── modules/
-│   │   ├── identity/              # Authentication & Token lifecycle
-│   │   │   ├── router.py          # /api/v1/auth endpoints
-│   │   │   ├── schemas.py         # Login, Token, Refresh DTOs
-│   │   │   ├── service.py         # Authentication logic & token generation
-│   │   │   └── dependencies.py    # get_current_user, get_current_active_user
-│   │   ├── users/                 # Staff profiles & RBAC
-│   │   │   ├── router.py          # /api/v1/users endpoints
-│   │   │   ├── models.py          # User, Role, UserRole ORM models
-│   │   │   ├── schemas.py         # User DTOs
-│   │   │   └── service.py         # User administration logic
-│   │   ├── crm/                   # Customer profiles, notes, tasks
-│   │   │   ├── router.py          # /api/v1/crm endpoints
-│   │   │   ├── models.py          # Customer, FinancialProfile, Note, Task models
-│   │   │   ├── schemas.py         # Customer and Task DTOs
-│   │   │   └── service.py         # CRM business operations
-│   │   ├── finance/               # Financial Calculation Toolkit
-│   │   │   ├── router.py          # /api/v1/calculator endpoints
-│   │   │   ├── engine.py          # Pure Python Decimal calculation math
-│   │   │   └── schemas.py         # EMI, Amortization, SIP DTOs
-│   │   ├── documents/             # Secure Document Management
-│   │   │   ├── router.py          # /api/v1/documents endpoints
-│   │   │   ├── models.py          # Document, DocumentVersion models
-│   │   │   ├── schemas.py         # Upload metadata & response DTOs
-│   │   │   ├── storage.py         # File storage abstraction & validation
-│   │   │   └── service.py         # Document lifecycle service
-│   │   ├── analytics/             # Reporting & Dashboard metrics
-│   │   │   ├── router.py          # /api/v1/dashboard endpoints
-│   │   │   ├── schemas.py         # Metric DTOs
-│   │   │   └── service.py         # SQL aggregation queries
-│   │   └── audit/                 # Tamper-evident Audit Logging
-│   │       ├── router.py          # /api/v1/audit endpoints
-│   │       ├── models.py          # AuditLog ORM model
-│   │       ├── schemas.py         # AuditLog DTOs
-│   │       └── service.py         # Asynchronous audit event recorder
-│   ├── main.py                    # FastAPI root application & router assembly
-│   └── tests/                     # Automated test suites
-│       ├── conftest.py            # Test database fixtures, client factories
-│       ├── test_auth.py           # Identity & RBAC tests
-│       ├── test_calculator.py     # EMI & SIP numerical precision tests
-│       ├── test_crm.py            # Customer & task lifecycle tests
-│       └── test_documents.py      # Upload validation & storage tests
+│   ├── core/                      # Foundational configuration & core clients
+│   │   ├── __init__.py
+│   │   ├── config.py              # Pydantic Settings loading from .env (IMPLEMENTED)
+│   │   └── redis.py               # Redis client pool & async health ping probe (IMPLEMENTED)
+│   ├── db/                        # Database connectivity & session lifecycle
+│   │   ├── __init__.py
+│   │   └── session.py             # SQLAlchemy 2.x engine, async_sessionmaker & DB health probe (IMPLEMENTED)
+│   ├── api/                       # API router consolidation & diagnostic endpoints
+│   │   ├── __init__.py
+│   │   ├── router.py              # Main /api/v1 router aggregating modules (IMPLEMENTED)
+│   │   └── health.py              # Liveness, Readiness, and Health probes (IMPLEMENTED)
+│   ├── modules/                   # Domain business modules (Scheduled Phases 3–7)
+│   │   ├── identity/              # Authentication & Token lifecycle (Phase 3)
+│   │   ├── users/                 # Staff profiles & RBAC (Phase 3)
+│   │   ├── crm/                   # Customer profiles, notes, tasks (Phase 5)
+│   │   ├── finance/               # Financial Calculation Toolkit (Phase 4)
+│   │   ├── documents/             # Secure Document Management (Phase 6)
+│   │   ├── analytics/             # Reporting & Dashboard metrics (Phase 7)
+│   │   └── audit/                 # Tamper-evident Audit Logging (Phase 7)
+│   └── main.py                    # FastAPI application factory & root endpoint (IMPLEMENTED)
+├── tests/                         # Backend automated test suite (IMPLEMENTED)
+│   ├── conftest.py                # Pytest async_client fixtures with ASGITransport (IMPLEMENTED)
+│   └── test_health.py             # Tests for root, liveness, readiness, health & CORS (IMPLEMENTED)
 ├── alembic/                       # Migration scripts
-│   ├── env.py                     # Alembic migration environment
-│   └── versions/                  # Individual timestamped migrations
-├── alembic.ini                    # Alembic configuration file
-├── requirements.txt               # Pinned Python package dependencies
-└── Dockerfile.backend             # Production container definition
+│   ├── env.py                     # Alembic migration environment configured to Base.metadata (IMPLEMENTED)
+│   ├── script.py.mako             # Async/sync migration script template (IMPLEMENTED)
+│   └── versions/                  # Individual timestamped migrations (Phase 2+)
+├── alembic.ini                    # Alembic configuration file (IMPLEMENTED)
+├── pyproject.toml                 # Ruff linter and formatter configuration (IMPLEMENTED)
+├── pytest.ini                     # Pytest runner configuration (IMPLEMENTED)
+├── requirements.txt               # Pinned Python package dependencies (IMPLEMENTED)
+├── .env.example                   # Environment configuration template (IMPLEMENTED)
+└── Dockerfile.backend             # Production & dev container definition (IMPLEMENTED)
 ```
 
 ### 3.2 Frontend Application Layout (`frontend/`)
 
 ```
 frontend/
-├── public/                        # Static brand assets and favicon
+├── public/                        # Static brand assets
 ├── src/
-│   ├── assets/                    # SVG icons, illustrations, logo
-│   ├── components/                # Reusable UI component library
-│   │   ├── common/                # Buttons, Inputs, Modals, Badges, Loaders
-│   │   ├── layout/                # Sidebar, Navbar, PageHeader, AppShell
-│   │   ├── feedback/              # Alert banners, Toast notifications
-│   │   └── tables/                # Paginated data table with sorting/filtering
-│   ├── context/                   # Global React state providers
-│   │   ├── AuthContext.jsx        # User state, token refresh, login/logout
-│   │   └── AlertContext.jsx       # Global toast notification dispatch
-│   ├── hooks/                     # Custom reusable hooks
-│   │   ├── useAuth.js             # Convenient hook for AuthContext
-│   │   ├── useDebounce.js         # Input debounce for search fields
-│   │   └── useCalculator.js       # Client-side preview computation
-│   ├── pages/                     # Routed views
-│   │   ├── auth/                  # LoginPage, ForgotPasswordPage
-│   │   ├── dashboard/             # DashboardOverviewPage
-│   │   ├── crm/                   # CustomerListPage, CustomerDetailPage, TaskBoard
-│   │   ├── calculator/            # EMICalculatorPage, SIPCalculatorPage
-│   │   ├── documents/             # DocumentVaultPage, UploadModal
-│   │   └── audit/                 # AuditLogViewerPage
-│   ├── services/                  # HTTP API services
-│   │   ├── apiClient.js           # Axios instance with auth interceptors
-│   │   ├── authService.js         # Login, refresh, logout requests
-│   │   ├── crmService.js          # Customer & Task API calls
-│   │   ├── calcService.js         # Financial calculator backend calls
-│   │   └── docService.js          # Multi-part file upload & download
-│   ├── utils/                     # Formatting and mathematical utilities
-│   │   ├── currency.js            # Currency formatting (INR / USD)
-│   │   ├── date.js                # Timestamp formatting (ISO to friendly)
-│   │   └── validation.js          # Client-side form validation schemas
-│   ├── App.jsx                    # Route definitions and protected route guards
-│   ├── index.css                  # Tailwind directives and custom financial theme
-│   └── main.jsx                   # React root bootstrap
-├── index.html                     # HTML5 entrypoint with SEO meta tags
-├── package.json                   # Pinned npm dependencies & scripts
-├── tailwind.config.js             # Custom Tailwind color palette & typography
-├── vite.config.js                 # Vite development & build config
-└── Dockerfile.frontend            # Nginx production build container
+│   ├── components/                # Reusable UI component library (Phase 1–8)
+│   ├── layouts/
+│   │   └── AppLayout.jsx          # SaaS shell with responsive sidebar & status pill (IMPLEMENTED)
+│   ├── pages/
+│   │   ├── WorkspacePage.jsx      # Live diagnostics & modular architecture preview (IMPLEMENTED)
+│   │   ├── CustomersPlaceholder.jsx # Phase 5 CRM placeholder (IMPLEMENTED)
+│   │   ├── DocumentsPlaceholder.jsx # Phase 6 Document Vault placeholder (IMPLEMENTED)
+│   │   └── CalculatorPlaceholder.jsx# Phase 4 Finance Toolkit placeholder (IMPLEMENTED)
+│   ├── services/
+│   │   └── api.js                 # Reusable fetch client with error normalization (IMPLEMENTED)
+│   ├── App.jsx                    # React Router DOM route hierarchy (IMPLEMENTED)
+│   ├── index.css                  # Tailwind directives and custom financial scrollbars (IMPLEMENTED)
+│   └── main.jsx                   # React 18 bootstrap entry point (IMPLEMENTED)
+├── index.html                     # HTML5 entrypoint with SEO meta tags (IMPLEMENTED)
+├── package.json                   # Pinned npm dependencies & scripts (IMPLEMENTED)
+├── package-lock.json              # Committed reproducible lockfile (IMPLEMENTED)
+├── postcss.config.js              # PostCSS configuration for Tailwind CSS (IMPLEMENTED)
+├── tailwind.config.js             # Custom Tailwind color palette & typography (IMPLEMENTED)
+├── vite.config.js                 # Vite development & build config (IMPLEMENTED)
+├── .env.example                   # Frontend environment configuration template (IMPLEMENTED)
+└── Dockerfile.frontend            # Node.js development container definition (IMPLEMENTED)
 ```
+
 
 ---
 
