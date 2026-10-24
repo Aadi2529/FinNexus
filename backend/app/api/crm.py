@@ -1726,6 +1726,22 @@ async def list_work_categories(
     return [WorkCategorySchema.model_validate(c) for c in categories]
 
 
+def _normalize_checklist_template(
+    template: list[dict] | None,
+) -> list[dict] | None:
+    """Normalize checklist template steps ensuring sequential 0-based positions."""
+    if template is None:
+        return None
+    normalized = []
+    for idx, item in enumerate(template):
+        if isinstance(item, dict) and item.get("title"):
+            clean_item = dict(item)
+            clean_item["title"] = str(item["title"]).strip()
+            clean_item["position"] = idx
+            normalized.append(clean_item)
+    return normalized
+
+
 @router.post(
     "/categories",
     response_model=WorkCategorySchema,
@@ -1757,7 +1773,7 @@ async def create_work_category(
         code=payload.code.upper().strip(),
         description=payload.description.strip() if payload.description else None,
         default_priority=payload.default_priority.upper(),
-        checklist_template=payload.checklist_template,
+        checklist_template=_normalize_checklist_template(payload.checklist_template),
         is_active=True,
     )
     session.add(category)
@@ -1796,7 +1812,7 @@ async def update_work_category(
     if payload.default_priority:
         cat.default_priority = payload.default_priority.upper()
     if payload.checklist_template is not None:
-        cat.checklist_template = payload.checklist_template
+        cat.checklist_template = _normalize_checklist_template(payload.checklist_template)
     if payload.is_active is not None:
         cat.is_active = payload.is_active
 

@@ -41,6 +41,25 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         ) from err
 
+    # Enforce maximum session lifetime (8 hours from original login)
+    session_max_exp = payload.get("session_max_exp")
+    session_start = payload.get("session_start")
+    import time
+    now_ts = int(time.time())
+
+    if session_max_exp is not None and now_ts > session_max_exp:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has expired. Maximum session lifetime of 8 hours exceeded.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if session_start is not None and (now_ts - session_start) > 8 * 3600:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has expired. Maximum session lifetime of 8 hours exceeded.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     jti = payload.get("jti")
     if jti and await is_token_jti_blacklisted(jti):
         raise HTTPException(

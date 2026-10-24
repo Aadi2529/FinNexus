@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    actor User as Operator / Client
+    participant UI as Toolkit Frontend (Aadhaar / PAN Modal)
+    participant API as FastAPI Toolkit Router (/api/v1/toolkit)
+    participant DocService as Document Processing Service
+    participant Engine as PyMuPDF (fitz) & Pillow
+
+    User->>UI: Upload File (PDF/Image) + Optional Password + Client Name
+    UI->>API: POST /api/v1/toolkit/documents/crop-aadhaar (multipart/form-data)
+    
+    API->>DocService: process_aadhaar_document(file_bytes, password, client_name)
+    
+    alt Password Protected PDF
+        DocService->>DocService: Attempt supplied password
+        DocService->>Engine: Decrypt PDF with fitz
+        Note over DocService,Engine: Auto-fallback password permutations<br/>(Name prefix + YYYY)
+    end
+
+    DocService->>Engine: Open first page with PyMuPDF
+    DocService->>DocService: Calculate fixed crop bounding box<br/>Top: 72%, Left: 8%, Bottom: 7%, Right: 8%
+    DocService->>Engine: Render cropped pixmap at 300 DPI
+    
+    DocService->>DocService: Auto-format DOB (DD/MM/YYYY) via regex
+    DocService->>DocService: Generate standardized filename<br/>({ClientName}_Aadhaar_Cropped_{Date}.pdf)
+    
+    DocService->>Engine: Export to PDF/A & high-res PNG preview
+    DocService-->>API: Processed bytes, metadata, preview base64
+    
+    API-->>UI: HTTP 200 OK {download_url, filename, preview_url, status: "SUCCESS"}
+    UI-->>User: Display side-by-side cropped preview & download button

@@ -24,6 +24,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_application() -> FastAPI:
     """Application factory configuring middleware, routes, and OpenAPI metadata."""
+    is_production = settings.ENVIRONMENT == "production" and not settings.DEBUG
+
     application = FastAPI(
         title=settings.PROJECT_NAME,
         version=settings.VERSION,
@@ -31,11 +33,29 @@ def create_application() -> FastAPI:
             "FinNexus unified financial operations platform API providing "
             "CRM, loan calculators, secure document vaults, and compliance audit logs."
         ),
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else f"{settings.API_V1_PREFIX}/openapi.json",
         lifespan=lifespan,
     )
+
+    # Security Headers Middleware
+    @application.middleware("http")
+    async def add_security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+            "magnetometer=(), microphone=(), payment=(), usb=()"
+        )
+        if settings.ENVIRONMENT == "production":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+        return response
 
     # Configure CORS with explicit environment-controlled origins (no wildcards with credentials)
     application.add_middleware(

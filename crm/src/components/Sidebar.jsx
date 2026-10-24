@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { NavLink, useNavigate, useLocation } from "react-router-dom";
+import { NavLink, useNavigate, useLocation, Link } from "react-router-dom";
 import {
   LayoutDashboard,
   ClipboardList,
@@ -17,7 +17,7 @@ import {
   Building2,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { crmAPI } from "../services/api";
+import { APP_URLS, crmAPI } from "../services/api";
 
 export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) {
   const { user, isAdmin, primaryRole } = useAuth();
@@ -90,9 +90,11 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
         {/* Brand Header */}
         <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800/80 bg-slate-950/40">
           <div className="flex items-center gap-3 overflow-hidden">
+            <Link to={APP_URLS.dashboard} onClick={() => setCollapsed(false)}>
             <div className="w-9 h-9 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs ring-1 ring-teal-400/30">
               <Building2 className="w-5 h-5 text-white" />
             </div>
+            </Link>
             {!collapsed && (
               <div className="flex flex-col truncate">
                 <span className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">

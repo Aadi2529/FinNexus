@@ -2,15 +2,16 @@
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.dependencies import get_current_user, security_bearer
 from app.core.security import (
     blacklist_token_jti,
@@ -31,22 +32,28 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
+from app.core.rate_limit import RateLimiter
 
 logger = logging.getLogger("financeflow.auth")
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+login_limiter = RateLimiter(max_requests=10, window_seconds=60, prefix="login")
+refresh_limiter = RateLimiter(max_requests=30, window_seconds=60, prefix="refresh")
 
 
 @router.post(
     "/login",
     response_model=TokenResponse,
     summary="Authenticate User and Issue Tokens",
+    dependencies=[Depends(login_limiter)],
 )
 async def login(
     payload: LoginRequest,
+    response: Response,
     session: AsyncSession = Depends(get_db_session),
 ) -> TokenResponse:
-    """Validate credentials and return dual-token JWT and refresh token."""
+    """Validate credentials and return dual-token JWT and refresh token bound to 8-hour maximum session lifetime."""
     normalized_email = payload.email.lower().strip()
 
     try:
@@ -89,15 +96,29 @@ async def login(
             detail="User account is deactivated. Please contact an administrator.",
         )
 
+    now = datetime.now(UTC)
+    now_ts = int(now.timestamp())
+    session_id = uuid.uuid4()
+    # Absolute maximum session lifetime is strictly 8 hours from login
+    session_expires_at = now + timedelta(hours=8)
+    session_max_ts = int(session_expires_at.timestamp())
+
     roles = [r.name for r in user.roles]
     access_token, jti, expire = create_access_token(
         user_id=str(user.id),
         email=user.email,
         roles=roles,
         full_name=user.full_name,
+        session_id=str(session_id),
+        session_start=now_ts,
+        session_max_exp=session_max_ts,
     )
 
-    raw_refresh_token, token_hash, refresh_expires_at = generate_refresh_token()
+    raw_refresh_token, token_hash, _ = generate_refresh_token()
+    normal_refresh_expires = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    # Refresh token can never exceed the 8-hour absolute session expiration
+    refresh_expires_at = min(normal_refresh_expires, session_expires_at)
+
     db_refresh_token = RefreshToken(
         id=uuid.uuid4(),
         user_id=user.id,
@@ -107,11 +128,22 @@ async def login(
     session.add(db_refresh_token)
     await session.flush()
 
+    # Issue secure browser-session cookie (no Max-Age/Expires so it is removed when browser closes)
+    response.set_cookie(
+        key="finnexus_session",
+        value=raw_refresh_token,
+        httponly=True,
+        samesite="lax",
+        secure=settings.ENVIRONMENT == "production",
+        path="/",
+    )
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=raw_refresh_token,
         token_type="bearer",
-        expires_in=int((expire - datetime.now(UTC)).total_seconds()),
+        expires_in=int((expire - now).total_seconds()),
+        session_expires_in=int((session_expires_at - now).total_seconds()),
         user=UserResponse(
             id=user.id,
             email=user.email,
@@ -126,13 +158,29 @@ async def login(
     "/refresh",
     response_model=TokenResponse,
     summary="Rotate Refresh Token and Issue New Access Token",
+    dependencies=[Depends(refresh_limiter)],
 )
 async def refresh_token(
-    payload: RefreshTokenRequest,
+    request: Request,
+    response: Response,
+    payload: RefreshTokenRequest | None = None,
     session: AsyncSession = Depends(get_db_session),
 ) -> TokenResponse:
-    """Exchange a valid refresh token for a newly issued access token and rotated refresh token."""
-    token_hash = hash_token_sha256(payload.refresh_token)
+    """Exchange a valid refresh token for a newly issued access token and rotated refresh token within the 8-hour maximum session lifetime."""
+    raw_token = None
+    if payload and payload.refresh_token:
+        raw_token = payload.refresh_token
+    elif "finnexus_session" in request.cookies:
+        raw_token = request.cookies["finnexus_session"]
+
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token or active session cookie required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token_hash = hash_token_sha256(raw_token)
     now = datetime.now(UTC)
 
     stmt = (
@@ -144,6 +192,13 @@ async def refresh_token(
     token_record = result.scalar_one_or_none()
 
     if not token_record:
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token.",
@@ -157,6 +212,13 @@ async def refresh_token(
             token_record.id,
             token_record.user_id,
         )
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked. Please sign in again.",
@@ -167,15 +229,38 @@ async def refresh_token(
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
 
-    if expires_at < now:
+    # Check absolute session expiry (capped at 8 hours from original login)
+    session_limit = token_record.created_at
+    if session_limit.tzinfo is None:
+        session_limit = session_limit.replace(tzinfo=UTC)
+    session_limit = session_limit + timedelta(hours=8)
+    session_max_bound = min(expires_at, session_limit)
+
+    if now >= session_max_bound:
+        token_record.revoked_at = now
+        await session.flush()
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token has expired. Please sign in again.",
+            detail="Maximum session lifetime of 8 hours exceeded. Please sign in again.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     user = token_record.user
     if not user or not user.is_active:
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account is inactive or no longer exists.",
@@ -185,14 +270,21 @@ async def refresh_token(
     token_record.revoked_at = now
 
     roles = [r.name for r in user.roles]
+    session_start = int((session_max_bound - timedelta(hours=8)).timestamp())
     new_access_token, jti, expire = create_access_token(
         user_id=str(user.id),
         email=user.email,
         roles=roles,
         full_name=user.full_name,
+        session_start=session_start,
+        session_max_exp=int(session_max_bound.timestamp()),
     )
 
-    new_raw_refresh, new_token_hash, new_refresh_expires = generate_refresh_token()
+    new_raw_refresh, new_token_hash, _ = generate_refresh_token()
+    normal_refresh_expires = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    # The new refresh token must inherit the same absolute session boundary!
+    new_refresh_expires = min(normal_refresh_expires, session_max_bound)
+
     new_db_token = RefreshToken(
         id=uuid.uuid4(),
         user_id=user.id,
@@ -202,11 +294,134 @@ async def refresh_token(
     session.add(new_db_token)
     await session.flush()
 
+    # Update session cookie
+    response.set_cookie(
+        key="finnexus_session",
+        value=new_raw_refresh,
+        httponly=True,
+        samesite="lax",
+        secure=settings.ENVIRONMENT == "production",
+        path="/",
+    )
+
     return TokenResponse(
         access_token=new_access_token,
         refresh_token=new_raw_refresh,
         token_type="bearer",
         expires_in=int((expire - now).total_seconds()),
+        session_expires_in=int((session_max_bound - now).total_seconds()),
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            is_active=user.is_active,
+            roles=roles,
+        ),
+    )
+
+
+@router.get(
+    "/session",
+    response_model=TokenResponse,
+    summary="Validate Session Cookie and Return Access Token",
+    dependencies=[Depends(refresh_limiter)],
+)
+async def get_session(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_db_session),
+) -> TokenResponse:
+    """Validate HttpOnly browser session cookie, check 8-hour maximum lifetime, and issue fresh 15-minute access token."""
+    raw_token = request.cookies.get("finnexus_session")
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No active browser session found.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token_hash = hash_token_sha256(raw_token)
+    now = datetime.now(UTC)
+
+    stmt = (
+        select(RefreshToken)
+        .options(selectinload(RefreshToken.user).selectinload(User.roles))
+        .where(RefreshToken.token_hash == token_hash)
+    )
+    result = await session.execute(stmt)
+    token_record = result.scalar_one_or_none()
+
+    if not token_record or token_record.revoked_at is not None:
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been revoked or is invalid. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    expires_at = token_record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+
+    session_limit = token_record.created_at
+    if session_limit.tzinfo is None:
+        session_limit = session_limit.replace(tzinfo=UTC)
+    session_limit = session_limit + timedelta(hours=8)
+    session_max_bound = min(expires_at, session_limit)
+
+    if now >= session_max_bound:
+        token_record.revoked_at = now
+        await session.flush()
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Maximum session lifetime of 8 hours exceeded. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = token_record.user
+    if not user or not user.is_active:
+        response.delete_cookie(
+            key="finnexus_session",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=settings.ENVIRONMENT == "production",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is inactive or no longer exists.",
+        )
+
+    roles = [r.name for r in user.roles]
+    session_start = int((session_max_bound - timedelta(hours=8)).timestamp())
+    access_token, jti, expire = create_access_token(
+        user_id=str(user.id),
+        email=user.email,
+        roles=roles,
+        full_name=user.full_name,
+        session_start=session_start,
+        session_max_exp=int(session_max_bound.timestamp()),
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=raw_token,
+        token_type="bearer",
+        expires_in=int((expire - now).total_seconds()),
+        session_expires_in=int((session_max_bound - now).total_seconds()),
         user=UserResponse(
             id=user.id,
             email=user.email,
@@ -222,12 +437,23 @@ async def refresh_token(
     summary="Revoke Active Session",
 )
 async def logout(
+    request: Request,
+    response: Response,
     payload: RefreshTokenRequest | None = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(security_bearer),
     session: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    """Revoke current access token JTI and mark refresh token revoked."""
+    """Revoke current access token JTI, clear session cookie, and mark refresh token revoked."""
+    # Always delete the browser session cookie
+    response.delete_cookie(
+        key="finnexus_session",
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=settings.ENVIRONMENT == "production",
+    )
+
+    # Blacklist current access token JTI if present
     if credentials and credentials.credentials:
         try:
             token_payload = decode_access_token(credentials.credentials)
@@ -238,8 +464,15 @@ async def logout(
         except Exception:
             pass
 
+    # Revoke refresh token from payload or cookie
+    raw_refresh = None
     if payload and payload.refresh_token:
-        token_hash = hash_token_sha256(payload.refresh_token)
+        raw_refresh = payload.refresh_token
+    elif "finnexus_session" in request.cookies:
+        raw_refresh = request.cookies["finnexus_session"]
+
+    if raw_refresh:
+        token_hash = hash_token_sha256(raw_refresh)
         stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
         res = await session.execute(stmt)
         token_obj = res.scalar_one_or_none()

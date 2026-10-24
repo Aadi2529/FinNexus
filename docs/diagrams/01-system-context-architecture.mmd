@@ -1,0 +1,49 @@
+graph TB
+    subgraph Clients["User Browser Clients"]
+        Dashboard["Dashboard Portal (:5173)<br/>Executive Metrics & SSO"]
+        CRM["FinanceFlow CRM (:5174)<br/>Clients, Work Orders, Pipelines"]
+        Toolkit["Finance Toolkit (:5175)<br/>Calculators & PDF/Doc Suite"]
+        Insurance["Insurance Engine (:5176)<br/>Products, Quotes & Policies"]
+    end
+
+    subgraph BackendGateway["Shared FastAPI Backend (:8000)"]
+        CORS["CORS & Request Middleware"]
+        AuthMiddleware["Auth & RBAC Bearer Dependencies"]
+        
+        subgraph APIRouters["API Routers (/api/v1)"]
+            AuthRouter["/auth<br/>Login, Refresh, Register, Users"]
+            CRMRouter["/crm & /clients & /work-orders<br/>Clients, Tasks, Orders, Categories"]
+            ToolkitRouter["/toolkit<br/>Calculators, Aadhaar/PAN Crop, Merge"]
+            InsuranceRouter["/insurance<br/>Products, Quotes, Policies, Claims"]
+            HealthRouter["/health<br/>Live, Ready, Diagnostics"]
+        end
+
+        subgraph ServiceLayer["Domain & Service Layer"]
+            SecService["Security & JWT Service"]
+            DocService["Document Processing Service<br/>(PyMuPDF, PyPDF, Pillow)"]
+            CleanupService["Demo Cleanup & Seeding"]
+            AuditService["Audit Log Recorder"]
+        end
+    end
+
+    subgraph Persistence["Persistence & Cache"]
+        Postgres[(PostgreSQL 16 Database<br/>Port 5432)]
+        Redis[(Redis 7 Cache & Token Store<br/>Port 6379)]
+        FileSystem[(Local Storage / Vault<br/>storage/documents)]
+    end
+
+    Dashboard -->|"HTTP / REST<br/>JWT Auth"| CORS
+    CRM -->|"HTTP / REST<br/>JWT Auth"| CORS
+    Toolkit -->|"HTTP / REST<br/>JWT Auth"| CORS
+    Insurance -->|"HTTP / REST<br/>JWT Auth"| CORS
+
+    CORS --> AuthMiddleware
+    AuthMiddleware --> APIRouters
+
+    AuthRouter --> SecService
+    ToolkitRouter --> DocService
+    CRMRouter --> AuditService
+
+    SecService --> Redis
+    APIRouters --> Postgres
+    DocService --> FileSystem

@@ -25,9 +25,29 @@ from app.db.seed import seed_initial_data
 from app.db.session import Base, get_db_session
 from app.main import app
 from app.services.document_processor import (
+    AADHAAR_BOTTOM_CROP,
+    AADHAAR_FIXED_CROP_RATIOS,
+    AADHAAR_LEFT_CROP,
+    AADHAAR_RIGHT_CROP,
+    AADHAAR_TOP_CROP,
+    PAN_BOTTOM_CROP,
+    PAN_FIXED_CROP_RATIOS,
+    PAN_LEFT_CROP,
+    PAN_RIGHT_CROP,
+    PAN_TOP_CROP,
+    TOOLKIT_TEMP_DIR,
     derive_aadhaar_password,
     derive_pan_password,
+    detect_aadhaar_card_crop_rect,
+    detect_pan_card_crop_rect,
+    get_aadhaar_filenames,
+    get_fixed_aadhaar_crop_rect,
+    get_fixed_pan_crop_rect,
+    get_pan_filenames,
+    is_safe_filename,
+    normalize_client_name,
     sanitize_filename,
+    validate_crop_against_page,
 )
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -178,6 +198,52 @@ def test_filename_sanitization():
     assert sanitize_filename("..\\..\\malicious.pdf") == "malicious.pdf"
 
 
+def test_fixed_crop_configuration_and_boundaries():
+    assert AADHAAR_TOP_CROP == 0.72
+    assert AADHAAR_LEFT_CROP == 0.08
+    assert AADHAAR_BOTTOM_CROP == 0.07
+    assert AADHAAR_RIGHT_CROP == 0.08
+
+    assert PAN_TOP_CROP == 0.77
+    assert PAN_LEFT_CROP == 0.11
+    assert PAN_RIGHT_CROP == 0.49
+    assert PAN_BOTTOM_CROP == 0.05
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=595.3, height=841.9)
+
+    # 1. Aadhaar fixed crop validation
+    aadhaar_rect = get_fixed_aadhaar_crop_rect(page)
+    assert aadhaar_rect.is_valid
+    assert 0 <= aadhaar_rect.x0 < aadhaar_rect.x1 <= page.rect.width
+    assert 0 <= aadhaar_rect.y0 < aadhaar_rect.y1 <= page.rect.height
+    assert round(aadhaar_rect.x0, 2) == round(page.rect.width * AADHAAR_FIXED_CROP_RATIOS["x0"], 2)
+    assert round(aadhaar_rect.y0, 2) == round(page.rect.height * AADHAAR_FIXED_CROP_RATIOS["y0"], 2)
+
+    # 2. PAN fixed crop validation
+    pan_rect = get_fixed_pan_crop_rect(page)
+    assert pan_rect.is_valid
+    assert 0 <= pan_rect.x0 < pan_rect.x1 <= page.rect.width
+    assert 0 <= pan_rect.y0 < pan_rect.y1 <= page.rect.height
+    assert round(pan_rect.x0, 2) == round(page.rect.width * PAN_FIXED_CROP_RATIOS["x0"], 2)
+    assert round(pan_rect.y0, 2) == round(page.rect.height * PAN_FIXED_CROP_RATIOS["y0"], 2)
+
+    # 3. Detect methods apply fixed crop by default
+    assert detect_aadhaar_card_crop_rect(page) == aadhaar_rect
+    assert detect_pan_card_crop_rect(page) == pan_rect
+
+    # 4. Out-of-bounds boundary clamping
+    extreme_crop = pymupdf.Rect(-100, -50, 1000, 1200)
+    clamped = validate_crop_against_page(extreme_crop, page.rect)
+    assert clamped.x0 >= page.rect.x0
+    assert clamped.y0 >= page.rect.y0
+    assert clamped.x1 <= page.rect.x1
+    assert clamped.y1 <= page.rect.y1
+
+    doc.close()
+
+
+
 # -----------------------------------------------------------------------------
 # Endpoint Tests: Aadhaar Processor
 # -----------------------------------------------------------------------------
@@ -214,11 +280,18 @@ async def test_aadhaar_processor_encrypted_success(
     assert payload["tool"] == "aadhaar_processor"
     assert len(payload["files"]) >= 3  # unlocked_pdf, cropped_pdf, card_image
 
-    # Check generated filenames
+    # Check generated filenames & types
     file_types = {f["file_type"] for f in payload["files"]}
     assert "unlocked_pdf" in file_types
     assert "cropped_pdf" in file_types
     assert "card_image" in file_types
+
+    file_names = [f["name"] for f in payload["files"]]
+    assert "ADITYA SUBHASH THAKARE NORMAL UNLOCKED.pdf" in file_names
+    assert "ADITYA SUBHASH THAKARE NORMAL CROPPED.pdf" in file_names
+    assert "ADITYA SUBHASH THAKARE NORMAL.jpg" in file_names
+    assert payload["zip_download_url"] is not None
+    assert "ADITYA%20SUBHASH%20THAKARE%20AADHAAR%20FILES.zip" in payload["zip_download_url"]
 
 
 @pytest.mark.asyncio
@@ -274,6 +347,13 @@ async def test_aadhaar_processor_both_normal_and_masked(
     payload = res.json()
     assert len(payload["files"]) == 6  # 3 files per document
     assert payload["zip_download_url"] is not None
+    file_names = [f["name"] for f in payload["files"]]
+    assert "ADITYA SUBHASH THAKARE NORMAL UNLOCKED.pdf" in file_names
+    assert "ADITYA SUBHASH THAKARE NORMAL CROPPED.pdf" in file_names
+    assert "ADITYA SUBHASH THAKARE NORMAL.jpg" in file_names
+    assert "ADITYA SUBHASH THAKARE MASKED UNLOCKED.pdf" in file_names
+    assert "ADITYA SUBHASH THAKARE MASKED CROPPED.pdf" in file_names
+    assert "ADITYA SUBHASH THAKARE MASKED.jpg" in file_names
 
 
 # -----------------------------------------------------------------------------
@@ -310,6 +390,11 @@ async def test_pan_processor_encrypted_success(
     assert payload["status"] == "SUCCESS"
     assert len(payload["files"]) == 3
     assert payload["zip_download_url"] is not None
+    file_names = [f["name"] for f in payload["files"]]
+    assert "ADITYA THAKARE PAN UNLOCKED.pdf" in file_names
+    assert "ADITYA THAKARE PAN CROPPED.pdf" in file_names
+    assert "ADITYA THAKARE PAN.jpg" in file_names
+    assert "ADITYA%20THAKARE%20PAN%20FILES.zip" in payload["zip_download_url"]
 
 
 @pytest.mark.asyncio
@@ -470,3 +555,203 @@ async def test_download_and_preview_endpoints(
         headers=auth_headers,
     )
     assert bad_res.status_code == 400 or bad_res.status_code == 404
+
+
+# -----------------------------------------------------------------------------
+# Tests: Client Name Normalization, Traversal Prevention & Architecture
+# -----------------------------------------------------------------------------
+
+
+def test_client_name_normalization():
+    # Normal uppercase
+    assert normalize_client_name("Aditya Subhash Thakare") == "ADITYA SUBHASH THAKARE"
+    # Traversal characters removed
+    assert normalize_client_name("../../admin/root") == "ADMIN ROOT"
+    assert normalize_client_name("..\\..\\passwords") == "PASSWORDS"
+    # Unsafe filesystem characters replaced
+    assert normalize_client_name("John: Doe* <Senior>") == "JOHN DOE SENIOR"
+    # Windows reserved name fallback
+    assert normalize_client_name("CON") == "CLIENT"
+    assert normalize_client_name("NUL") == "CLIENT"
+    assert normalize_client_name("PRN") == "CLIENT"
+    # Empty or purely non-alphanumeric fallback
+    assert normalize_client_name("") == "CLIENT"
+    assert normalize_client_name("   ") == "CLIENT"
+    assert normalize_client_name("!@#$%^&*()") == "CLIENT"
+    # Safe filename validation
+    assert is_safe_filename("ADITYA THAKARE NORMAL.pdf") is True
+    assert is_safe_filename("../etc/passwd") is False
+    assert is_safe_filename("invalid/path/file.pdf") is False
+
+
+def test_output_naming_dictionaries():
+    aadhaar_names = get_aadhaar_filenames("Aditya Subhash Thakare")
+    assert aadhaar_names["normal_unlocked"] == "ADITYA SUBHASH THAKARE NORMAL UNLOCKED.pdf"
+    assert aadhaar_names["normal_cropped"] == "ADITYA SUBHASH THAKARE NORMAL CROPPED.pdf"
+    assert aadhaar_names["normal_jpg"] == "ADITYA SUBHASH THAKARE NORMAL.jpg"
+    assert aadhaar_names["masked_unlocked"] == "ADITYA SUBHASH THAKARE MASKED UNLOCKED.pdf"
+    assert aadhaar_names["masked_cropped"] == "ADITYA SUBHASH THAKARE MASKED CROPPED.pdf"
+    assert aadhaar_names["masked_jpg"] == "ADITYA SUBHASH THAKARE MASKED.jpg"
+    assert aadhaar_names["zip"] == "ADITYA SUBHASH THAKARE AADHAAR FILES.zip"
+
+    pan_names = get_pan_filenames("Aditya Thakare")
+    assert pan_names["unlocked"] == "ADITYA THAKARE PAN UNLOCKED.pdf"
+    assert pan_names["cropped"] == "ADITYA THAKARE PAN CROPPED.pdf"
+    assert pan_names["jpg"] == "ADITYA THAKARE PAN.jpg"
+    assert pan_names["zip"] == "ADITYA THAKARE PAN FILES.zip"
+
+
+def test_architecture_modularity():
+    # Verify modular package app.services.document_processing
+    import app.services.document_processing as dp_pkg
+    import app.services.document_processor as dp_facade
+
+    # Facade re-exports key symbols without duplicating logic
+    for attr in [
+        "derive_aadhaar_password",
+        "derive_pan_password",
+        "process_aadhaar_documents",
+        "process_pan_document",
+        "normalize_client_name",
+        "get_aadhaar_filenames",
+        "get_pan_filenames",
+        "get_fixed_aadhaar_crop_rect",
+        "get_fixed_pan_crop_rect",
+        "TOOLKIT_TEMP_DIR",
+    ]:
+        assert hasattr(dp_pkg, attr)
+        assert hasattr(dp_facade, attr)
+        assert getattr(dp_pkg, attr) is getattr(dp_facade, attr)
+
+
+@pytest.mark.asyncio
+async def test_aadhaar_processor_masked_only(
+    client: AsyncClient, auth_headers: dict[str, str]
+):
+    pdf_masked = make_test_pdf(title="Masked Aadhaar Only", is_aadhaar=True)
+    files = {
+        "masked_file": ("masked.pdf", pdf_masked, "application/pdf"),
+    }
+    data = {
+        "full_name": "Priya Sharma",
+        "dob": "15/11/2001",
+    }
+
+    res = await client.post(
+        "/api/v1/toolkit/identity/aadhaar",
+        headers=auth_headers,
+        data=data,
+        files=files,
+    )
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert len(payload["files"]) == 3
+    file_names = [f["name"] for f in payload["files"]]
+    assert "PRIYA SHARMA MASKED UNLOCKED.pdf" in file_names
+    assert "PRIYA SHARMA MASKED CROPPED.pdf" in file_names
+    assert "PRIYA SHARMA MASKED.jpg" in file_names
+    assert payload["zip_download_url"] is not None
+
+
+@pytest.mark.asyncio
+async def test_download_client_based_file_with_spaces(
+    client: AsyncClient, auth_headers: dict[str, str]
+):
+    # Process a document and verify download of file with space in filename
+    pdf_bytes = make_test_pdf(title="PAN Card", is_pan=True)
+    files = {"file": ("pan.pdf", pdf_bytes, "application/pdf")}
+    data = {"full_name": "Rahul Verma", "dob": "12/08/1995"}
+
+    res = await client.post(
+        "/api/v1/toolkit/identity/pan",
+        headers=auth_headers,
+        data=data,
+        files=files,
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    cropped_item = next(f for f in payload["files"] if f["file_type"] == "cropped_pdf")
+
+    # Download using item.download_url
+    dl_res = await client.get(cropped_item["download_url"], headers=auth_headers)
+    assert dl_res.status_code == 200
+    assert dl_res.headers["content-type"] == "application/pdf"
+
+    # Also test downloading ZIP
+    zip_url = payload["zip_download_url"]
+    zip_res = await client.get(zip_url, headers=auth_headers)
+    assert zip_res.status_code == 200
+    assert zip_res.headers["content-type"] == "application/zip"
+
+
+@pytest.mark.asyncio
+async def test_failure_cleanup_removes_temp_dir(
+    client: AsyncClient, auth_headers: dict[str, str]
+):
+    # Call with invalid password PDF - verify no orphan directory remains
+    pdf_bytes = make_test_pdf(title="Protected", password="CORRECTPASS")
+    files = {"file": ("pan.pdf", pdf_bytes, "application/pdf")}
+    data = {"full_name": "Test Client", "dob": "01/01/2000"}  # Derives 01012000 which fails
+
+    # Count dirs before
+    dirs_before = set(TOOLKIT_TEMP_DIR.iterdir()) if TOOLKIT_TEMP_DIR.exists() else set()
+
+    res = await client.post(
+        "/api/v1/toolkit/identity/pan",
+        headers=auth_headers,
+        data=data,
+        files=files,
+    )
+    assert res.status_code == 400
+
+    # Count dirs after
+    dirs_after = set(TOOLKIT_TEMP_DIR.iterdir()) if TOOLKIT_TEMP_DIR.exists() else set()
+    # The failed job directory should have been cleaned up
+    assert dirs_after == dirs_before
+
+
+@pytest.mark.asyncio
+async def test_concurrency_isolation(
+    client: AsyncClient, auth_headers: dict[str, str]
+):
+    import asyncio
+
+    pdf1 = make_test_pdf(title="Doc 1", is_pan=True)
+    pdf2 = make_test_pdf(title="Doc 2", is_pan=True)
+
+    task1 = client.post(
+        "/api/v1/toolkit/identity/pan",
+        headers=auth_headers,
+        data={"full_name": "Concurrent User", "dob": "01/01/1990"},
+        files={"file": ("pan1.pdf", pdf1, "application/pdf")},
+    )
+    task2 = client.post(
+        "/api/v1/toolkit/identity/pan",
+        headers=auth_headers,
+        data={"full_name": "Concurrent User", "dob": "01/01/1990"},
+        files={"file": ("pan2.pdf", pdf2, "application/pdf")},
+    )
+
+    res1, res2 = await asyncio.gather(task1, task2)
+    assert res1.status_code == 200
+    assert res2.status_code == 200
+
+    job1 = res1.json()["job_id"]
+    job2 = res2.json()["job_id"]
+    assert job1 != job2  # Isolated per-request UUID directories
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_requests_blocked(client: AsyncClient):
+    # Attempt Aadhaar processing without token -> 401
+    res = await client.post("/api/v1/toolkit/identity/aadhaar", data={"full_name": "Test"})
+    assert res.status_code == 401
+
+    # Attempt PAN processing without token -> 401
+    res = await client.post("/api/v1/toolkit/identity/pan", data={"full_name": "Test"})
+    assert res.status_code == 401
+
+    # Attempt download without token -> 401
+    res = await client.get("/api/v1/toolkit/download/job_123/file.pdf")
+    assert res.status_code == 401
+

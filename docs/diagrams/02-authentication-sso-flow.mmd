@@ -1,0 +1,50 @@
+sequenceDiagram
+    autonumber
+    actor User as Operator / Admin
+    participant App as Frontend (Dashboard/CRM/Toolkit/Insurance)
+    participant API as FastAPI Backend (/api/v1/auth)
+    participant DB as PostgreSQL (users, refresh_tokens)
+    participant Redis as Redis (Token Blacklist)
+
+    %% LOGIN
+    Note over User,Redis: 1. User Authentication (Login)
+    User->>App: Enter Email & Password
+    App->>API: POST /api/v1/auth/login {email, password}
+    API->>DB: Query User by email with roles
+    DB-->>API: User record (hashed_password, is_active)
+    API->>API: Verify password (Argon2 / Bcrypt)
+    API->>API: Generate Access Token (JWT, 15m) with JTI
+    API->>API: Generate Refresh Token (64-char random)
+    API->>DB: Store SHA-256(refresh_token) with expiry (7d)
+    API-->>App: {access_token, refresh_token, token_type: "Bearer", user}
+    App->>App: Store tokens in localStorage (Shared across apps)
+
+    %% AUTHENTICATED REQUEST
+    Note over User,Redis: 2. Authenticated API Call
+    App->>API: GET /api/v1/crm/work-orders (Authorization: Bearer <access_token>)
+    API->>Redis: Check if JTI is in blacklist
+    Redis-->>API: Not blacklisted
+    API->>API: Decode JWT & verify expiration & roles
+    API->>DB: Fetch permitted work orders
+    DB-->>API: Work order records
+    API-->>App: HTTP 200 OK with Data
+
+    %% TOKEN ROTATION
+    Note over User,Redis: 3. Token Rotation (Refresh)
+    App->>API: POST /api/v1/auth/refresh {refresh_token}
+    API->>API: Hash provided refresh_token with SHA-256
+    API->>DB: Query active token_hash in refresh_tokens
+    DB-->>API: Active RefreshToken found
+    API->>DB: Revoke old refresh_token (revoked_at = now)
+    API->>API: Generate new Access Token & new Refresh Token
+    API->>DB: Save new SHA-256(new_refresh_token)
+    API-->>App: {access_token, refresh_token}
+    App->>App: Replace tokens in localStorage
+
+    %% LOGOUT
+    Note over User,Redis: 4. Secure Logout
+    App->>API: POST /api/v1/auth/logout (Bearer <access_token>)
+    API->>Redis: SETEX blacklist:{jti} remaining_ttl "revoked"
+    API->>DB: Revoke all active refresh_tokens for user
+    API-->>App: HTTP 200 OK {"detail": "Successfully logged out"}
+    App->>App: Clear localStorage & redirect to login

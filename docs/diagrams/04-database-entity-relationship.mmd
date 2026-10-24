@@ -1,0 +1,198 @@
+erDiagram
+    users ||--o{ user_roles : "has"
+    roles ||--o{ user_roles : "assigned to"
+    users ||--o{ refresh_tokens : "owns"
+    users ||--o{ customers : "assigned officer to"
+    users ||--o{ customer_notes : "authored"
+    users ||--o{ tasks : "assigned to"
+    users ||--o{ work_orders : "created / assigned to"
+    users ||--o{ work_order_reminders : "reminder recipient"
+    users ||--o{ work_order_checklist_items : "assigned / completed"
+    users ||--o{ work_order_history : "acted in"
+    users ||--o{ crm_notifications : "notified"
+    users ||--o{ documents : "verified by"
+    users ||--o{ audit_logs : "performed action"
+
+    customers ||--o| financial_profiles : "has"
+    customers ||--o{ customer_notes : "contains"
+    customers ||--o{ tasks : "has"
+    customers ||--o{ documents : "uploads"
+    customers ||--o{ work_orders : "requests"
+
+    work_categories ||--o{ work_orders : "categorizes"
+    work_orders ||--o{ work_order_reminders : "has reminders"
+    work_orders ||--o{ work_order_checklist_items : "composed of"
+    work_orders ||--o{ work_order_history : "tracks"
+    work_orders ||--o{ crm_notifications : "triggers"
+
+    users {
+        uuid id PK
+        string email UK
+        string hashed_password
+        string full_name
+        boolean is_active
+        datetime created_at
+        datetime updated_at
+    }
+
+    roles {
+        uuid id PK
+        string name UK
+        string description
+    }
+
+    user_roles {
+        uuid user_id PK,FK
+        uuid role_id PK,FK
+    }
+
+    refresh_tokens {
+        uuid id PK
+        uuid user_id FK
+        string token_hash UK
+        datetime expires_at
+        datetime revoked_at
+    }
+
+    customers {
+        uuid id PK
+        string first_name
+        string last_name
+        string email UK
+        string phone
+        string pan_number UK
+        string pipeline_status
+        boolean is_archived
+        datetime archived_at
+        uuid created_by_id FK
+        uuid assigned_officer_id FK
+        datetime created_at
+        datetime updated_at
+    }
+
+    financial_profiles {
+        uuid id PK
+        uuid customer_id UK,FK
+        string employment_type
+        numeric monthly_income
+        numeric monthly_obligations
+        integer cibil_score
+        string risk_tier
+        datetime updated_at
+    }
+
+    customer_notes {
+        uuid id PK
+        uuid customer_id FK
+        uuid author_id FK
+        text content
+        datetime created_at
+    }
+
+    tasks {
+        uuid id PK
+        uuid customer_id FK
+        uuid assigned_to_id FK
+        string title
+        text description
+        string priority
+        string status
+        date due_date
+        datetime completed_at
+        datetime created_at
+    }
+
+    work_categories {
+        uuid id PK
+        string name UK
+        string code UK
+        text description
+        string default_priority
+        json checklist_template
+        boolean is_active
+        datetime created_at
+    }
+
+    work_orders {
+        uuid id PK
+        string order_number UK
+        string title
+        text description
+        uuid client_id FK
+        uuid category_id FK
+        uuid created_by_id FK
+        uuid assigned_to_id FK
+        string priority
+        string status
+        datetime due_date
+        datetime completed_at
+        integer progress_percent
+        string work_priority
+        datetime created_at
+        datetime updated_at
+    }
+
+    work_order_checklist_items {
+        uuid id PK
+        uuid work_order_id FK
+        string title
+        text description
+        uuid assigned_to_id FK
+        string status
+        integer position
+        datetime due_date
+        datetime completed_at
+        uuid completed_by_id FK
+        datetime created_at
+    }
+
+    work_order_reminders {
+        uuid work_order_id PK,FK
+        uuid user_id PK,FK
+        datetime created_at
+    }
+
+    work_order_history {
+        uuid id PK
+        uuid work_order_id FK
+        uuid actor_id FK
+        string action
+        text details
+        datetime timestamp
+    }
+
+    crm_notifications {
+        uuid id PK
+        uuid user_id FK
+        uuid work_order_id FK
+        string title
+        text message
+        boolean is_read
+        string notification_type
+        datetime created_at
+    }
+
+    documents {
+        uuid id PK
+        uuid customer_id FK
+        string document_type
+        string original_filename
+        string storage_path UK
+        integer file_size_bytes
+        string mime_type
+        string sha256_hash
+        string verification_status
+        uuid verified_by_id FK
+        datetime created_at
+    }
+
+    audit_logs {
+        uuid id PK
+        uuid actor_id FK
+        string action
+        string resource_type
+        uuid resource_id
+        json state_delta
+        string ip_address
+        datetime created_at
+    }

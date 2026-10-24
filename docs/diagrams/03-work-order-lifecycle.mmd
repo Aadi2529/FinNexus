@@ -1,0 +1,33 @@
+stateDiagram-v2
+    [*] --> PENDING: Work Order Created<br/>(Auto-seeds checklist from Category)
+
+    PENDING --> IN_PROGRESS: Start Work / Mark Checklist Item Started
+    PENDING --> CANCELLED: Cancel Order (Admin only)
+
+    IN_PROGRESS --> BLOCKED: Impediment Encountered (Client pending docs)
+    BLOCKED --> IN_PROGRESS: Blocker Resolved
+
+    IN_PROGRESS --> REVIEW: All checklist items completed<br/>(or Supervisor Override)
+    
+    REVIEW --> COMPLETED: Final Supervisor Sign-off
+    REVIEW --> IN_PROGRESS: Reopened for Revisions
+
+    IN_PROGRESS --> CANCELLED: Cancelled with Reason
+    BLOCKED --> CANCELLED: Cancelled
+
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+
+    note right of IN_PROGRESS
+      Checklist Progress:
+      - Drag-and-drop sortable items
+      - Position sequence 0, 1, 2...
+      - Completion updates progress_percent
+      - History logs state delta
+    end note
+
+    note right of REVIEW
+      Quality Gate:
+      Requires 100% checklist completion
+      OR Supervisor Override with audit note
+    end note

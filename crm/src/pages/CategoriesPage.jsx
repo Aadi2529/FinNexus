@@ -12,10 +12,92 @@ import {
   ListOrdered,
   ArrowRight,
   ShieldAlert,
+  GripVertical,
 } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragOverlay,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { crmAPI } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import PriorityChip from "../components/PriorityChip";
+
+function generateStepId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `step-${crypto.randomUUID()}`;
+  }
+  return `step-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function SortableChecklistStep({ step, index, onRemove }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: step.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group px-2.5 py-1.5 rounded-lg border text-xs flex items-center justify-between gap-2 transition-all ${
+        isDragging
+          ? "opacity-30 bg-teal-50 border-dashed border-teal-400 shadow-inner"
+          : "bg-slate-50 hover:bg-slate-100/80 border-slate-200"
+      }`}
+    >
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`Drag step ${index + 1}: ${step.title}`}
+          className="text-slate-400 hover:text-slate-700 active:text-teal-600 cursor-grab active:cursor-grabbing p-1 -ml-1 rounded hover:bg-slate-200/60 touch-none flex-shrink-0 transition-colors focus:outline-none focus:ring-1 focus:ring-teal-500"
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </button>
+
+        <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold flex items-center justify-center shrink-0">
+          {index + 1}
+        </span>
+
+        <span className="truncate flex-1 text-slate-800 select-text" title={step.title}>
+          {step.title}
+        </span>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onRemove(step.id)}
+        className="text-slate-400 hover:text-rose-600 p-1 -mr-1 rounded hover:bg-rose-50 transition-colors flex-shrink-0"
+        title="Remove step"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
 
 export default function CategoriesPage() {
   const { isAdmin } = useAuth();
@@ -34,6 +116,19 @@ export default function CategoriesPage() {
   const [newStepText, setNewStepText] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [activeId, setActiveId] = useState(null);
+
+  // DnD Sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 3,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const fetchCategories = async () => {
     setLoading(true);
@@ -59,11 +154,13 @@ export default function CategoriesPage() {
     setFormPriority("NORMAL");
     setFormActive(true);
     setTemplateItems([
-      { title: "Initial document collection & verification" },
-      { title: "Credit committee review & risk assessment" },
-      { title: "Final execution and compliance sign-off" },
+      { id: generateStepId(), title: "Initial document collection & verification", position: 0 },
+      { id: generateStepId(), title: "Credit committee review & risk assessment", position: 1 },
+      { id: generateStepId(), title: "Final execution and compliance sign-off", position: 2 },
     ]);
+    setNewStepText("");
     setFormError("");
+    setActiveId(null);
     setModalOpen(true);
   };
 
@@ -74,19 +171,60 @@ export default function CategoriesPage() {
     setFormDesc(cat.description || "");
     setFormPriority(cat.default_priority || "NORMAL");
     setFormActive(cat.is_active !== false);
-    setTemplateItems(Array.isArray(cat.checklist_template) ? [...cat.checklist_template] : []);
+    const rawTemplates = Array.isArray(cat.checklist_template) ? cat.checklist_template : [];
+    const sorted = [...rawTemplates].sort((a, b) => {
+      const posA = typeof a.position === "number" ? a.position : Infinity;
+      const posB = typeof b.position === "number" ? b.position : Infinity;
+      return posA - posB;
+    });
+    setTemplateItems(
+      sorted.map((item, idx) => ({
+        id: item.id || generateStepId(),
+        title: item.title || "",
+        position: typeof item.position === "number" ? item.position : idx,
+      }))
+    );
+    setNewStepText("");
     setFormError("");
+    setActiveId(null);
     setModalOpen(true);
   };
 
   const handleAddTemplateStep = () => {
     if (!newStepText.trim()) return;
-    setTemplateItems([...templateItems, { title: newStepText.trim() }]);
+    setTemplateItems((prev) => [
+      ...prev,
+      { id: generateStepId(), title: newStepText.trim(), position: prev.length },
+    ]);
     setNewStepText("");
   };
 
-  const handleRemoveTemplateStep = (idx) => {
-    setTemplateItems(templateItems.filter((_, i) => i !== idx));
+  const handleRemoveTemplateStep = (idToRemove) => {
+    setTemplateItems((prev) => prev.filter((item) => item.id !== idToRemove));
+  };
+
+  const handleDragStart = (event) => {
+    setActiveId(event.active.id);
+  };
+
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
+    setActiveId(null);
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    setTemplateItems((items) => {
+      const oldIndex = items.findIndex((item) => item.id === active.id);
+      const newIndex = items.findIndex((item) => item.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return items;
+      return arrayMove(items, oldIndex, newIndex);
+    });
+  };
+
+  const handleDragCancel = () => {
+    setActiveId(null);
   };
 
   const handleSaveCategory = async (e) => {
@@ -106,6 +244,7 @@ export default function CategoriesPage() {
         default_priority: formPriority,
         is_active: formActive,
         checklist_template: templateItems.map((item, idx) => ({
+          id: item.id,
           title: item.title,
           position: idx,
         })),
@@ -134,6 +273,9 @@ export default function CategoriesPage() {
       alert(err?.message || "Cannot delete category referenced by existing work orders.");
     }
   };
+
+  const activeStepIndex = templateItems.findIndex((s) => s.id === activeId);
+  const activeStep = activeStepIndex !== -1 ? templateItems[activeStepIndex] : null;
 
   return (
     <div className="space-y-6">
@@ -170,7 +312,11 @@ export default function CategoriesPage() {
           </div>
         ) : (
           categories.map((cat) => {
-            const templates = cat.checklist_template || [];
+            const templates = (cat.checklist_template ? [...cat.checklist_template] : []).sort((a, b) => {
+              const posA = typeof a.position === "number" ? a.position : Infinity;
+              const posB = typeof b.position === "number" ? b.position : Infinity;
+              return posA - posB;
+            });
             return (
               <div
                 key={cat.id}
@@ -201,7 +347,7 @@ export default function CategoriesPage() {
                     <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                       {templates.map((step, idx) => (
                         <div
-                          key={idx}
+                          key={step.id || idx}
                           className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200/70 text-xs text-slate-700 flex items-center gap-2.5"
                         >
                           <span className="w-4 h-4 rounded-full bg-teal-100 text-teal-800 text-[10px] font-bold flex items-center justify-center shrink-0">
@@ -280,7 +426,7 @@ export default function CategoriesPage() {
                     placeholder="e.g. Loan Origination & KYC"
                     value={formName}
                     onChange={(e) => setFormName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
                   />
                 </div>
                 <div>
@@ -291,7 +437,7 @@ export default function CategoriesPage() {
                     placeholder="e.g. LOAN_KYC"
                     value={formCode}
                     onChange={(e) => setFormCode(e.target.value.toUpperCase())}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 font-mono"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 font-mono focus:outline-none focus:ring-1 focus:ring-teal-500"
                   />
                 </div>
               </div>
@@ -302,7 +448,7 @@ export default function CategoriesPage() {
                   <select
                     value={formPriority}
                     onChange={(e) => setFormPriority(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
                   >
                     <option value="LOW">Low</option>
                     <option value="NORMAL">Normal</option>
@@ -315,7 +461,7 @@ export default function CategoriesPage() {
                   <select
                     value={formActive ? "ACTIVE" : "INACTIVE"}
                     onChange={(e) => setFormActive(e.target.value === "ACTIVE")}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
                   >
                     <option value="ACTIVE">Active (Available)</option>
                     <option value="INACTIVE">Inactive (Hidden)</option>
@@ -330,31 +476,72 @@ export default function CategoriesPage() {
                   placeholder="Operational scope of this work category..."
                   value={formDesc}
                   onChange={(e) => setFormDesc(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
                 />
               </div>
 
               {/* Template Milestones */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Preset Checklist Template ({templateItems.length} steps)
-                </label>
-                <div className="space-y-1.5 max-h-36 overflow-y-auto mb-2">
-                  {templateItems.map((step, idx) => (
-                    <div
-                      key={idx}
-                      className="px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs flex items-center justify-between gap-2"
-                    >
-                      <span className="truncate flex-1">{step.title}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTemplateStep(idx)}
-                        className="text-slate-400 hover:text-rose-600"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Preset Checklist Template ({templateItems.length} steps)
+                  </label>
+                  {templateItems.length > 1 && (
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      Drag handle to reorder
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1.5 max-h-48 overflow-y-auto mb-2 pr-1">
+                  {templateItems.length === 0 ? (
+                    <div className="py-4 text-center text-xs text-slate-400 bg-slate-50/50 rounded-lg border border-dashed border-slate-200">
+                      No checklist steps configured yet.
                     </div>
-                  ))}
+                  ) : (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onDragCancel={handleDragCancel}
+                    >
+                      <SortableContext
+                        items={templateItems.map((item) => item.id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {templateItems.map((step, idx) => (
+                          <SortableChecklistStep
+                            key={step.id}
+                            step={step}
+                            index={idx}
+                            onRemove={handleRemoveTemplateStep}
+                          />
+                        ))}
+                      </SortableContext>
+
+                      <DragOverlay>
+                        {activeStep ? (
+                          <div className="px-2.5 py-1.5 rounded-lg bg-white border border-teal-500 shadow-lg text-xs flex items-center justify-between gap-2 ring-2 ring-teal-500/20 cursor-grabbing">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <div className="text-teal-600 p-1 -ml-1 flex-shrink-0">
+                                <GripVertical className="w-3.5 h-3.5" />
+                              </div>
+                              <span className="w-4 h-4 rounded-full bg-teal-100 text-teal-800 text-[10px] font-bold flex items-center justify-center shrink-0">
+                                {activeStepIndex + 1}
+                              </span>
+                              <span className="truncate flex-1 font-medium text-slate-900">
+                                {activeStep.title}
+                              </span>
+                            </div>
+                            <div className="p-1 -mr-1 text-slate-300 flex-shrink-0">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        ) : null}
+                      </DragOverlay>
+                    </DndContext>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -369,12 +556,12 @@ export default function CategoriesPage() {
                         handleAddTemplateStep();
                       }
                     }}
-                    className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300"
+                    className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
                   />
                   <button
                     type="button"
                     onClick={handleAddTemplateStep}
-                    className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg"
+                    className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
                   >
                     Add
                   </button>
@@ -385,14 +572,14 @@ export default function CategoriesPage() {
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-lg"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50"
                 >
                   {saving ? "Saving..." : "Save Category"}
                 </button>

@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
 
 
 class FinancialProfileSchema(BaseModel):
@@ -267,6 +267,20 @@ class WorkCategorySchema(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("checklist_template", mode="after")
+    @classmethod
+    def sort_checklist_template(cls, v: list[dict] | None) -> list[dict] | None:
+        if not v or not isinstance(v, list):
+            return v
+        return sorted(
+            v,
+            key=lambda x: (
+                x.get("position", 0)
+                if isinstance(x, dict) and isinstance(x.get("position"), (int, float))
+                else 0
+            ),
+        )
 
 
 class ChecklistItemCreate(BaseModel):

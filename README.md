@@ -17,6 +17,7 @@ The platform is designed around four decoupled React single-page applications (S
 
 ## Table of Contents
 
+- [📚 Documentation Library](#-enterprise-software-documentation-library)
 - [1. Project Overview](#1-project-overview)
 - [2. Key Modules](#2-key-modules)
 - [3. Verified Features](#3-verified-features)
@@ -36,6 +37,30 @@ The platform is designed around four decoupled React single-page applications (S
 - [17. Known Limitations](#17-known-limitations)
 - [18. Contributing](#18-contributing)
 - [19. License](#19-license)
+
+---
+
+## 📚 Enterprise Software Documentation Library
+
+A comprehensive, implementation-verified documentation suite is maintained in the [`docs/`](docs/INDEX.md) directory:
+
+| Document | Description |
+|---|---|
+| 📑 **[Master Documentation Index](docs/INDEX.md)** | Central index, reading guides by engineering role, and quick reference. |
+| 🎯 **[01 — Project Overview & Requirements](docs/01-project-overview.md)** | Purpose, problem statement, user personas, FR-001–025, NFR-001–010, scope boundaries. |
+| 🏛️ **[02 — System Architecture & HLD](docs/02-architecture.md)** | High-Level Design, monorepo topology, micro-frontends, request lifecycle, deployment architecture. |
+| 🗺️ **[03 — Codebase Map & Folder Structure](docs/03-folder-structure.md)** | Complete repository tree, responsibilities, entry points, and "Where to Make a Change" guide. |
+| ⚙️ **[04 — Function & Class Reference](docs/04-functions-reference.md)** | Critical services, method signatures, parameters, database mutations, and test mappings. |
+| 🔄 **[05 — End-to-End Feature Flows](docs/05-feature-flows.md)** | Technical flows for SSO, Customer 360, Work Orders, Checklist Drag-Drop Reordering, and Document Cropping. |
+| 🗄️ **[06 — Database Schema Reference](docs/06-database-schema.md)** | 16 tables, constraints, foreign key cascades, check constraints, Alembic migrations, and ERD. |
+| 🔌 **[07 — Comprehensive API Reference](docs/07-api-reference.md)** | REST API specification for `/auth`, `/crm`, `/clients`, `/work-orders`, `/toolkit`, `/insurance`, and `/health`. |
+| 🔐 **[08 — Auth, RBAC & Security Architecture](docs/08-auth-rbac-security.md)** | Dual-token auth, Redis JTI blacklisting, RBAC matrix, resource isolation, and security testing. |
+| 🧪 **[09 — Testing & Quality Assurance](docs/09-testing.md)** | In-memory SQLite test strategy, 13 test suites inventory, and verified execution results. |
+| 🛠️ **[10 — Setup, Configuration & Troubleshooting](docs/10-setup-troubleshooting.md)** | Step-by-step setup, `.env` reference, Docker Compose, and verified troubleshooting solutions. |
+| 🚀 **[11 — Developer Onboarding Guide](docs/11-developer-guide.md)** | Onboarding guide, code conventions, step-by-step contribution workflows, and PR checklist. |
+| 📖 **[12 — Business & Technical Glossary](docs/12-glossary.md)** | Indian financial terminology (Aadhaar, PAN, CIBIL, FOIR, MFU, CAN), operational terms, and definitions. |
+| 📊 **[Architecture & Workflow Diagrams](docs/diagrams/README.md)** | Editable Mermaid architecture, ERD, and state machine diagrams. |
+| 📋 **[Architecture Decision Records (ADRs)](docs/adr/README.md)** | Documented architectural choices (ADR-001 through ADR-005). |
 
 ---
 

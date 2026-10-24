@@ -86,12 +86,6 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_MS: int | None = None
     RATE_LIMIT_MAX_REQUESTS: int | None = None
 
-    # Super Admin Initial Seeder
-    SUPER_ADMIN_EMAIL: str | None = None
-    SUPER_ADMIN_PASSWORD: str | None = None
-    SUPER_ADMIN_FIRST_NAME: str | None = None
-    SUPER_ADMIN_LAST_NAME: str | None = None
-
     # Health Check Probe Timeouts
     DB_HEALTH_TIMEOUT: float = 3.0
     REDIS_HEALTH_TIMEOUT: float = 3.0
@@ -110,6 +104,19 @@ class Settings(BaseSettings):
         # Map NODE_ENV to ENVIRONMENT if provided
         if self.NODE_ENV and self.ENVIRONMENT == "development":
             self.ENVIRONMENT = self.NODE_ENV
+
+        # Production-grade fail-safe validations
+        if self.ENVIRONMENT == "production":
+            self.DEBUG = False
+            if (
+                not self.SECRET_KEY
+                or self.SECRET_KEY == "insecure_dev_key_must_be_overridden_in_production"
+                or len(self.SECRET_KEY) < 32
+            ):
+                raise ValueError(
+                    "CRITICAL SECURITY CONFIGURATION ERROR: SECRET_KEY must be a cryptographically "
+                    "secure string of at least 32 characters in production environments."
+                )
 
         # Assemble PostgreSQL URLs if DB_HOST, DB_USER, and DB_NAME are specified
         if self.DB_HOST and self.DB_USER and self.DB_NAME:

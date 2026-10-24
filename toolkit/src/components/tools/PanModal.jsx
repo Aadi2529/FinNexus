@@ -10,18 +10,17 @@ import {
   Archive,
   Image as ImageIcon,
   Shield,
-  Sliders,
   RefreshCw,
 } from "lucide-react";
 import api from "../../services/api";
+import { formatDobInput, validateDob } from "../../utils/dateFormatter";
 
 export default function PanModal({ isOpen, onClose, initialFile = null }) {
   const [fullName, setFullName] = useState("");
   const [dob, setDob] = useState("");
+  const [dobError, setDobError] = useState("");
   const [panFile, setPanFile] = useState(initialFile);
   const [isDragging, setIsDragging] = useState(false);
-  const [enableCustomCrop, setEnableCustomCrop] = useState(false);
-  const [cropBox, setCropBox] = useState({ yPercent: 54, heightPercent: 40 });
 
   React.useEffect(() => {
     if (initialFile) {
@@ -39,11 +38,32 @@ export default function PanModal({ isOpen, onClose, initialFile = null }) {
   const handleReset = () => {
     setFullName("");
     setDob("");
+    setDobError("");
     setPanFile(null);
     setLoading(false);
     setError("");
     setResult(null);
     setPreviewUrls({});
+  };
+
+  const handleDobChange = (e) => {
+    const formatted = formatDobInput(e.target.value, dob);
+    setDob(formatted);
+    if (formatted.length === 10) {
+      const check = validateDob(formatted);
+      setDobError(check.isValid ? "" : check.error);
+    } else {
+      setDobError("");
+    }
+  };
+
+  const handleDobBlur = () => {
+    if (dob.trim()) {
+      const check = validateDob(dob);
+      setDobError(check.isValid ? "" : check.error);
+    } else {
+      setDobError("");
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -60,6 +80,12 @@ export default function PanModal({ isOpen, onClose, initialFile = null }) {
       setError("Please enter client's date of birth.");
       return;
     }
+    const dobCheck = validateDob(dob);
+    if (!dobCheck.isValid) {
+      setDobError(dobCheck.error);
+      setError(dobCheck.error);
+      return;
+    }
 
     setLoading(true);
     setError("");
@@ -69,13 +95,6 @@ export default function PanModal({ isOpen, onClose, initialFile = null }) {
     formData.append("file", panFile);
     formData.append("full_name", fullName.trim());
     formData.append("dob", dob.trim());
-
-    if (enableCustomCrop) {
-      const y0 = 841.9 * (cropBox.yPercent / 100);
-      const h = 841.9 * (cropBox.heightPercent / 100);
-      const customRect = [35.0, y0, 560.0, Math.min(820.0, y0 + h)];
-      formData.append("custom_crop_json", JSON.stringify(customRect));
-    }
 
     const res = await api.toolkit.processPAN(formData);
     setLoading(false);
@@ -165,14 +184,24 @@ export default function PanModal({ isOpen, onClose, initialFile = null }) {
                   <input
                     type="text"
                     required
+                    maxLength={10}
                     value={dob}
-                    onChange={(e) => setDob(e.target.value)}
+                    onChange={handleDobChange}
+                    onBlur={handleDobBlur}
                     placeholder="DD/MM/YYYY (e.g. 29/05/2004)"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-xs text-slate-900 focus:outline-none focus:ring-2 focus:border-transparent ${
+                      dobError
+                        ? "border-rose-400 focus:ring-rose-500 bg-rose-50/20"
+                        : "border-slate-300 focus:ring-blue-500"
+                    }`}
                   />
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Converted automatically to DDMMYYYY for decryption.
-                  </p>
+                  {dobError ? (
+                    <p className="text-[11px] text-rose-600 font-medium mt-1">{dobError}</p>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Auto-formats DD/MM/YYYY. Converted automatically to DDMMYYYY for decryption.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -246,54 +275,7 @@ export default function PanModal({ isOpen, onClose, initialFile = null }) {
                 </div>
               </div>
 
-              {/* Calibration Option */}
-              <div className="pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setEnableCustomCrop(!enableCustomCrop)}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-blue-700"
-                >
-                  <Sliders className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Manual Crop Calibration {enableCustomCrop ? "(Enabled)" : "(Automatic)"}</span>
-                </button>
 
-                {enableCustomCrop && (
-                  <div className="mt-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
-                    <div>
-                      <div className="flex justify-between text-slate-600 font-medium mb-1">
-                        <span>Card Vertical Offset</span>
-                        <span className="font-mono">{cropBox.yPercent}% from top</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="30"
-                        max="70"
-                        value={cropBox.yPercent}
-                        onChange={(e) =>
-                          setCropBox({ ...cropBox, yPercent: Number(e.target.value) })
-                        }
-                        className="w-full accent-blue-600"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-slate-600 font-medium mb-1">
-                        <span>Card Height Span</span>
-                        <span className="font-mono">{cropBox.heightPercent}% of page</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="25"
-                        max="55"
-                        value={cropBox.heightPercent}
-                        onChange={(e) =>
-                          setCropBox({ ...cropBox, heightPercent: Number(e.target.value) })
-                        }
-                        className="w-full accent-blue-600"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
 
               {/* Submit CTA */}
               <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">

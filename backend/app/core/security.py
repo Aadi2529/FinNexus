@@ -77,18 +77,32 @@ def create_access_token(
     email: str,
     roles: list[str],
     full_name: str | None = None,
+    session_id: str | None = None,
+    session_start: int | None = None,
+    session_max_exp: int | None = None,
     expires_delta: timedelta | None = None,
 ) -> tuple[str, str, datetime]:
-    """Generate a signed JWT access token.
+    """Generate a signed JWT access token with 15m expiration bounded by 8h max session lifetime.
 
     Returns:
         (encoded_jwt_str, jti, expiry_datetime)
     """
     now = datetime.now(UTC)
+    now_ts = int(now.timestamp())
+
+    # Session start and absolute 8-hour maximum expiration
+    s_start = session_start if session_start is not None else now_ts
+    s_max_exp = session_max_exp if session_max_exp is not None else (s_start + 8 * 3600)
+
+    # Access token lifespan: 15 minutes by default
     if expires_delta:
         expire = now + expires_delta
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    # Access token expiry can never exceed absolute session expiration
+    if int(expire.timestamp()) > s_max_exp:
+        expire = datetime.fromtimestamp(s_max_exp, tz=UTC)
 
     jti = str(uuid.uuid4())
     payload = {
@@ -96,9 +110,12 @@ def create_access_token(
         "email": email,
         "full_name": full_name or "",
         "roles": roles,
-        "iat": int(now.timestamp()),
+        "iat": now_ts,
         "exp": int(expire.timestamp()),
         "jti": jti,
+        "session_id": session_id or str(uuid.uuid4()),
+        "session_start": s_start,
+        "session_max_exp": s_max_exp,
     }
 
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")

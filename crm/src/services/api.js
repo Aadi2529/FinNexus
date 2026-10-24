@@ -20,53 +20,82 @@ const LEGACY_REFRESH_KEY = "financeflow_refresh_token";
 const USER_KEY = "finnexus_user";
 const LEGACY_USER_KEY = "financeflow_user";
 
-export const tokenStorage = {
-  getAccessToken: () => localStorage.getItem(TOKEN_KEY) || localStorage.getItem(LEGACY_TOKEN_KEY),
-  getRefreshToken: () => localStorage.getItem(REFRESH_KEY) || localStorage.getItem(LEGACY_REFRESH_KEY),
-  getUser: () => {
-    try {
-      const u = localStorage.getItem(USER_KEY) || localStorage.getItem(LEGACY_USER_KEY);
-      return u ? JSON.parse(u) : null;
-    } catch {
-      return null;
-    }
-  },
-  setTokens: (accessToken, refreshToken, user) => {
-    if (accessToken) {
-      localStorage.setItem(TOKEN_KEY, accessToken);
-      localStorage.setItem(LEGACY_TOKEN_KEY, accessToken);
-    }
-    if (refreshToken) {
-      localStorage.setItem(REFRESH_KEY, refreshToken);
-      localStorage.setItem(LEGACY_REFRESH_KEY, refreshToken);
-    }
-    if (user) {
-      localStorage.setItem(USER_KEY, JSON.stringify(user));
-      localStorage.setItem(LEGACY_USER_KEY, JSON.stringify(user));
-    }
-  },
-  clear: () => {
+// Immediate purge of any lingering persistent tokens from localStorage
+const purgePersistentStorage = () => {
+  try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(LEGACY_TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(LEGACY_REFRESH_KEY);
     localStorage.removeItem(USER_KEY);
     localStorage.removeItem(LEGACY_USER_KEY);
+  } catch {
+    // Storage access may be restricted
+  }
+};
+purgePersistentStorage();
+
+export const tokenStorage = {
+  getAccessToken: () => {
+    try {
+      return sessionStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(LEGACY_TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  },
+  getRefreshToken: () => {
+    try {
+      return sessionStorage.getItem(REFRESH_KEY) || sessionStorage.getItem(LEGACY_REFRESH_KEY);
+    } catch {
+      return null;
+    }
+  },
+  getUser: () => {
+    try {
+      const u = sessionStorage.getItem(USER_KEY) || sessionStorage.getItem(LEGACY_USER_KEY);
+      return u ? JSON.parse(u) : null;
+    } catch {
+      return null;
+    }
+  },
+  setTokens: (accessToken, refreshToken, user) => {
+    try {
+      if (accessToken) {
+        sessionStorage.setItem(TOKEN_KEY, accessToken);
+        sessionStorage.setItem(LEGACY_TOKEN_KEY, accessToken);
+      }
+      if (refreshToken) {
+        sessionStorage.setItem(REFRESH_KEY, refreshToken);
+        sessionStorage.setItem(LEGACY_REFRESH_KEY, refreshToken);
+      }
+      if (user) {
+        sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+        sessionStorage.setItem(LEGACY_USER_KEY, JSON.stringify(user));
+      }
+    } catch {
+      // Storage access may be restricted
+    }
+  },
+  clear: () => {
+    try {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(LEGACY_TOKEN_KEY);
+      sessionStorage.removeItem(REFRESH_KEY);
+      sessionStorage.removeItem(LEGACY_REFRESH_KEY);
+      sessionStorage.removeItem(USER_KEY);
+      sessionStorage.removeItem(LEGACY_USER_KEY);
+      sessionStorage.removeItem("finnexus_session_start");
+      localStorage.removeItem("finnexus_last_activity");
+      localStorage.removeItem("finnexus_session_start");
+    } catch {
+      // Storage access may be restricted
+    }
+    purgePersistentStorage();
   },
   processSSOFromUrl: () => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const ssoToken = params.get("sso_token");
-      const refreshToken = params.get("refresh_token");
-
-      if (ssoToken) {
-        localStorage.setItem(TOKEN_KEY, ssoToken);
-        localStorage.setItem(LEGACY_TOKEN_KEY, ssoToken);
-        if (refreshToken) {
-          localStorage.setItem(REFRESH_KEY, refreshToken);
-          localStorage.setItem(LEGACY_REFRESH_KEY, refreshToken);
-        }
-
+      if (params.has("sso_token") || params.has("refresh_token")) {
         params.delete("sso_token");
         params.delete("refresh_token");
         const remainingQuery = params.toString() ? `?${params.toString()}` : "";
@@ -83,15 +112,8 @@ export const tokenStorage = {
     return false;
   },
   getHandoffUrl: (targetAppUrl, targetPath = "") => {
-    const token = tokenStorage.getAccessToken();
-    const refresh = tokenStorage.getRefreshToken();
     const cleanBase = targetAppUrl.replace(/\/+$/, "");
     const cleanPath = targetPath.startsWith("/") ? targetPath : targetPath ? `/${targetPath}` : "";
-    
-    if (token) {
-      const sep = cleanPath.includes("?") ? "&" : "?";
-      return `${cleanBase}${cleanPath}${sep}sso_token=${encodeURIComponent(token)}${refresh ? `&refresh_token=${encodeURIComponent(refresh)}` : ""}`;
-    }
     return `${cleanBase}${cleanPath}`;
   },
 };
@@ -131,14 +153,11 @@ async function request(endpoint, options = {}) {
       ...options,
       headers,
       body,
+      credentials: "include",
     });
 
-    if (response.status === 401 && !endpoint.includes("/auth/login") && !endpoint.includes("/auth/refresh")) {
+    if (response.status === 401 && !endpoint.includes("/auth/login") && !endpoint.includes("/auth/refresh") && !endpoint.includes("/auth/session")) {
       const refreshToken = tokenStorage.getRefreshToken();
-      if (!refreshToken) {
-        tokenStorage.clear();
-        return { success: false, status: 401, error: "Session expired" };
-      }
 
       if (!isRefreshing) {
         isRefreshing = true;
@@ -146,7 +165,8 @@ async function request(endpoint, options = {}) {
           const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ refresh_token: refreshToken }),
+            body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
+            credentials: "include",
           });
 
           if (refreshRes.ok) {
@@ -156,13 +176,13 @@ async function request(endpoint, options = {}) {
             onRefreshed(data.access_token);
 
             headers["Authorization"] = `Bearer ${data.access_token}`;
-            response = await fetch(url, { ...options, headers, body });
+            response = await fetch(url, { ...options, headers, body, credentials: "include" });
           } else {
             isRefreshing = false;
             tokenStorage.clear();
-            return { success: false, status: 401, error: "Refresh token expired" };
+            return { success: false, status: 401, error: "Session expired" };
           }
-        } catch (err) {
+        } catch {
           isRefreshing = false;
           tokenStorage.clear();
           return { success: false, status: 401, error: "Session revalidation failed" };
@@ -172,7 +192,7 @@ async function request(endpoint, options = {}) {
           subscribeTokenRefresh(async (newToken) => {
             headers["Authorization"] = `Bearer ${newToken}`;
             try {
-              const retryRes = await fetch(url, { ...options, headers, body });
+              const retryRes = await fetch(url, { ...options, headers, body, credentials: "include" });
               const retryData = await retryRes.json();
               resolve({ success: retryRes.ok, status: retryRes.status, data: retryData });
             } catch (err) {
@@ -228,10 +248,15 @@ async function crmRequest(endpoint, options = {}) {
 export const authAPI = {
   login: (email, password) => request("/auth/login", { method: "POST", body: { email, password } }),
   logout: async () => {
-    const res = await request("/auth/logout", { method: "POST" });
+    const refreshToken = tokenStorage.getRefreshToken();
+    const res = await request("/auth/logout", {
+      method: "POST",
+      body: refreshToken ? { refresh_token: refreshToken } : undefined,
+    });
     tokenStorage.clear();
     return res;
   },
+  getSession: () => request("/auth/session", { method: "GET" }),
   getCurrentUser: () => request("/auth/me", { method: "GET" }),
   getUsers: () => request("/auth/users", { method: "GET" }),
   registerUser: (userData) => request("/auth/register", { method: "POST", body: userData }),

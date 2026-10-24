@@ -15,7 +15,7 @@ class LoginRequest(BaseModel):
 class RefreshTokenRequest(BaseModel):
     """Payload to exchange a refresh token for a new access token."""
 
-    refresh_token: str = Field(..., description="Raw refresh token string")
+    refresh_token: str | None = Field(default=None, description="Raw refresh token string (optional if provided via session cookie)")
 
 
 class UserResponse(BaseModel):
@@ -50,6 +50,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = Field(default=900, description="Access token lifespan in seconds")
     user: UserResponse
+    session_expires_in: int | None = Field(default=28800, description="Session absolute lifespan in seconds (8 hours)")
 
 
 class RegisterRequest(BaseModel):

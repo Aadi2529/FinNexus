@@ -1,6 +1,7 @@
 """FinanceFlow Toolkit Module Endpoints."""
 
 import hashlib
+import logging
 import re
 import uuid
 from decimal import ROUND_HALF_UP, Decimal
@@ -11,7 +12,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.dependencies import get_current_user
+from app.core.rate_limit import RateLimiter
 from app.db.models.auth import User
 from app.db.models.documents import Document
 from app.db.session import get_db_session
@@ -30,23 +33,21 @@ from app.schemas.toolkit import (
     SIPCalculatorResponse,
     SIPYearBreakdown,
 )
-from app.services.document_processor import (
+from app.services.document_processing import (
     TOOLKIT_TEMP_DIR,
     DocumentProcessingError,
     cleanup_expired_jobs,
     convert_images_to_pdf,
     create_job_directory,
-    create_zip_archive,
-    derive_aadhaar_password,
-    derive_pan_password,
-    detect_aadhaar_card_crop_rect,
-    detect_pan_card_crop_rect,
-    export_cropped_pdf_and_image,
-    export_unlocked_pdf,
+    is_safe_filename,
     merge_pdf_documents,
-    open_and_unlock_pdf,
+    process_aadhaar_documents,
+    process_pan_document,
     sanitize_filename,
 )
+
+logger = logging.getLogger("financeflow.toolkit")
+toolkit_limiter = RateLimiter(max_requests=30, window_seconds=60, prefix="toolkit")
 
 router = APIRouter(prefix="/toolkit", tags=["Finance Toolkit"])
 
@@ -334,6 +335,7 @@ async def list_documents(
     "/identity/aadhaar",
     response_model=DocumentProcessResponse,
     summary="Process Aadhaar Card PDF (Normal / Masked)",
+    dependencies=[Depends(toolkit_limiter)],
 )
 async def process_aadhaar(
     full_name: str = Form(...),
@@ -351,10 +353,8 @@ async def process_aadhaar(
             detail="At least one Aadhaar PDF (Normal or Masked) must be provided for processing.",
         )
 
-    try:
-        password = derive_aadhaar_password(full_name, dob)
-    except DocumentProcessingError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    normal_bytes = await normal_file.read() if normal_file else None
+    masked_bytes = await masked_file.read() if masked_file else None
 
     custom_rect = None
     if custom_crop_json:
@@ -367,146 +367,26 @@ async def process_aadhaar(
         except Exception:
             pass
 
-    job_id, job_dir = create_job_directory("aadhaar")
-    processed_items: list[ProcessedFileItem] = []
-    files_to_zip: list[tuple[Path, str]] = []
-
     try:
-        # Process Normal Aadhaar if present
-        if normal_file:
-            content = await normal_file.read()
-            doc, _ = open_and_unlock_pdf(content, password)
-
-            # 1. Unlocked full PDF
-            unlocked_filename = "normal_aadhaar_unlocked.pdf"
-            unlocked_path = job_dir / unlocked_filename
-            export_unlocked_pdf(doc, unlocked_path)
-            unlocked_size = unlocked_path.stat().st_size
-            processed_items.append(
-                ProcessedFileItem(
-                    name=unlocked_filename,
-                    file_type="unlocked_pdf",
-                    size_bytes=unlocked_size,
-                    mime_type="application/pdf",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{unlocked_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{unlocked_filename}",
-                )
-            )
-            files_to_zip.append((unlocked_path, unlocked_filename))
-
-            # 2. Cropped PDF and 300 DPI JPEG
-            crop_rect = detect_aadhaar_card_crop_rect(doc[0], custom_rect)
-            cropped_pdf_filename = "normal_aadhaar_cropped.pdf"
-            cropped_img_filename = "normal_aadhaar.jpg"
-            cropped_pdf_path = job_dir / cropped_pdf_filename
-            cropped_img_path = job_dir / cropped_img_filename
-
-            pdf_size, img_size = export_cropped_pdf_and_image(
-                doc, crop_rect, cropped_pdf_path, cropped_img_path, dpi=300
-            )
-
-            processed_items.append(
-                ProcessedFileItem(
-                    name=cropped_pdf_filename,
-                    file_type="cropped_pdf",
-                    size_bytes=pdf_size,
-                    mime_type="application/pdf",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{cropped_pdf_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{cropped_pdf_filename}",
-                )
-            )
-            files_to_zip.append((cropped_pdf_path, cropped_pdf_filename))
-
-            processed_items.append(
-                ProcessedFileItem(
-                    name=cropped_img_filename,
-                    file_type="card_image",
-                    size_bytes=img_size,
-                    mime_type="image/jpeg",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{cropped_img_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{cropped_img_filename}",
-                )
-            )
-            files_to_zip.append((cropped_img_path, cropped_img_filename))
-            doc.close()
-
-        # Process Masked Aadhaar if present
-        if masked_file:
-            content = await masked_file.read()
-            doc, _ = open_and_unlock_pdf(content, password)
-
-            unlocked_filename = "masked_aadhaar_unlocked.pdf"
-            unlocked_path = job_dir / unlocked_filename
-            export_unlocked_pdf(doc, unlocked_path)
-            unlocked_size = unlocked_path.stat().st_size
-            processed_items.append(
-                ProcessedFileItem(
-                    name=unlocked_filename,
-                    file_type="unlocked_pdf",
-                    size_bytes=unlocked_size,
-                    mime_type="application/pdf",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{unlocked_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{unlocked_filename}",
-                )
-            )
-            files_to_zip.append((unlocked_path, unlocked_filename))
-
-            crop_rect = detect_aadhaar_card_crop_rect(doc[0], custom_rect)
-            cropped_pdf_filename = "masked_aadhaar_cropped.pdf"
-            cropped_img_filename = "masked_aadhaar.jpg"
-            cropped_pdf_path = job_dir / cropped_pdf_filename
-            cropped_img_path = job_dir / cropped_img_filename
-
-            pdf_size, img_size = export_cropped_pdf_and_image(
-                doc, crop_rect, cropped_pdf_path, cropped_img_path, dpi=300
-            )
-
-            processed_items.append(
-                ProcessedFileItem(
-                    name=cropped_pdf_filename,
-                    file_type="cropped_pdf",
-                    size_bytes=pdf_size,
-                    mime_type="application/pdf",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{cropped_pdf_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{cropped_pdf_filename}",
-                )
-            )
-            files_to_zip.append((cropped_pdf_path, cropped_pdf_filename))
-
-            processed_items.append(
-                ProcessedFileItem(
-                    name=cropped_img_filename,
-                    file_type="card_image",
-                    size_bytes=img_size,
-                    mime_type="image/jpeg",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{cropped_img_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{cropped_img_filename}",
-                )
-            )
-            files_to_zip.append((cropped_img_path, cropped_img_filename))
-            doc.close()
-
-        zip_download_url = None
-        if len(files_to_zip) > 1:
-            zip_filename = "aadhaar_processed_files.zip"
-            zip_path = job_dir / zip_filename
-            create_zip_archive(files_to_zip, zip_path)
-            zip_download_url = f"/api/v1/toolkit/download/{job_id}/{zip_filename}"
-
-        return DocumentProcessResponse(
-            job_id=job_id,
-            status="SUCCESS",
-            tool="aadhaar_processor",
-            message=f"Successfully processed {len(files_to_zip)} Aadhaar documents and generated unlocked, cropped card outputs.",
-            files=processed_items,
-            zip_download_url=zip_download_url,
+        result = process_aadhaar_documents(
+            normal_bytes=normal_bytes,
+            masked_bytes=masked_bytes,
+            full_name=full_name,
+            dob=dob,
+            custom_rect=custom_rect,
         )
+        return result.to_response()
     except DocumentProcessingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     except Exception as exc:
+        logger.error("Aadhaar processing error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while processing Aadhaar document: {str(exc)}",
+            detail=(
+                f"An error occurred while processing Aadhaar document: {str(exc)}"
+                if settings.DEBUG
+                else "An error occurred while processing the Aadhaar document. Please verify the uploaded file and credentials."
+            ),
         )
 
 
@@ -514,6 +394,7 @@ async def process_aadhaar(
     "/identity/pan",
     response_model=DocumentProcessResponse,
     summary="Process PAN Card PDF",
+    dependencies=[Depends(toolkit_limiter)],
 )
 async def process_pan(
     file: UploadFile = File(...),
@@ -524,10 +405,7 @@ async def process_pan(
 ) -> DocumentProcessResponse:
     """Process PAN PDF, unlock using DDMMYYYY password convention, and extract print-ready PAN card."""
     cleanup_expired_jobs()
-    try:
-        password = derive_pan_password(dob)
-    except DocumentProcessingError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    content = await file.read()
 
     custom_rect = None
     if custom_crop_json:
@@ -540,79 +418,25 @@ async def process_pan(
         except Exception:
             pass
 
-    job_id, job_dir = create_job_directory("pan")
-    content = await file.read()
-
     try:
-        doc, _ = open_and_unlock_pdf(content, password)
-
-        # 1. Unlocked full PDF
-        unlocked_filename = "pan_unlocked.pdf"
-        unlocked_path = job_dir / unlocked_filename
-        export_unlocked_pdf(doc, unlocked_path)
-        unlocked_size = unlocked_path.stat().st_size
-
-        # 2. Cropped PDF and 300 DPI JPEG
-        crop_rect = detect_pan_card_crop_rect(doc[0], custom_rect)
-        cropped_pdf_filename = "pan_cropped.pdf"
-        cropped_img_filename = "pan_card.jpg"
-        cropped_pdf_path = job_dir / cropped_pdf_filename
-        cropped_img_path = job_dir / cropped_img_filename
-
-        pdf_size, img_size = export_cropped_pdf_and_image(
-            doc, crop_rect, cropped_pdf_path, cropped_img_path, dpi=300
+        result = process_pan_document(
+            file_bytes=content,
+            full_name=full_name,
+            dob=dob,
+            custom_rect=custom_rect,
         )
-        doc.close()
-
-        files_to_zip = [
-            (unlocked_path, unlocked_filename),
-            (cropped_pdf_path, cropped_pdf_filename),
-            (cropped_img_path, cropped_img_filename),
-        ]
-
-        zip_filename = "pan_processed_files.zip"
-        zip_path = job_dir / zip_filename
-        create_zip_archive(files_to_zip, zip_path)
-
-        return DocumentProcessResponse(
-            job_id=job_id,
-            status="SUCCESS",
-            tool="pan_processor",
-            message="PAN document decrypted and cropped successfully.",
-            files=[
-                ProcessedFileItem(
-                    name=unlocked_filename,
-                    file_type="unlocked_pdf",
-                    size_bytes=unlocked_size,
-                    mime_type="application/pdf",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{unlocked_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{unlocked_filename}",
-                ),
-                ProcessedFileItem(
-                    name=cropped_pdf_filename,
-                    file_type="cropped_pdf",
-                    size_bytes=pdf_size,
-                    mime_type="application/pdf",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{cropped_pdf_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{cropped_pdf_filename}",
-                ),
-                ProcessedFileItem(
-                    name=cropped_img_filename,
-                    file_type="card_image",
-                    size_bytes=img_size,
-                    mime_type="image/jpeg",
-                    download_url=f"/api/v1/toolkit/download/{job_id}/{cropped_img_filename}",
-                    preview_url=f"/api/v1/toolkit/preview/{job_id}/{cropped_img_filename}",
-                ),
-            ],
-            zip_download_url=f"/api/v1/toolkit/download/{job_id}/{zip_filename}",
-        )
+        return result.to_response()
     except DocumentProcessingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     except Exception as exc:
+        logger.error("PAN processing error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while processing PAN document: {str(exc)}",
+            detail=(
+                f"An error occurred while processing PAN document: {str(exc)}"
+                if settings.DEBUG
+                else "An error occurred while processing the PAN document. Please verify the uploaded file and credentials."
+            ),
         )
 
 
@@ -620,6 +444,7 @@ async def process_pan(
     "/pdf/merge",
     response_model=PDFMergeResponse,
     summary="Merge Multiple PDF Documents",
+    dependencies=[Depends(toolkit_limiter)],
 )
 async def merge_pdfs(
     files: list[UploadFile] = File(...),
@@ -671,9 +496,14 @@ async def merge_pdfs(
     except DocumentProcessingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     except Exception as exc:
+        logger.error("PDF merge error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to merge PDF documents: {str(exc)}",
+            detail=(
+                f"Failed to merge PDF documents: {str(exc)}"
+                if settings.DEBUG
+                else "Failed to merge PDF documents. Please ensure all uploaded files are valid, unencrypted PDFs."
+            ),
         )
 
 
@@ -681,6 +511,7 @@ async def merge_pdfs(
     "/images/to-pdf",
     response_model=ImagesToPDFResponse,
     summary="Convert Multiple Images into a Consolidated PDF",
+    dependencies=[Depends(toolkit_limiter)],
 )
 async def convert_images(
     files: list[UploadFile] = File(...),
@@ -734,9 +565,14 @@ async def convert_images(
     except DocumentProcessingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     except Exception as exc:
+        logger.error("Image to PDF error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to convert images to PDF: {str(exc)}",
+            detail=(
+                f"Failed to convert images to PDF: {str(exc)}"
+                if settings.DEBUG
+                else "Failed to convert images to PDF. Please ensure all uploaded files are valid images."
+            ),
         )
 
 
@@ -750,19 +586,20 @@ async def download_processed_file(
     current_user: User = Depends(get_current_user),
 ) -> FileResponse:
     """Securely download a processed document with strict filename and path verification."""
-    if not re.match(r"^[a-zA-Z0-9_-]+$", job_id) or not re.match(
-        r"^[a-zA-Z0-9._-]+$", filename
-    ):
+    import urllib.parse
+
+    clean_filename = urllib.parse.unquote(filename)
+    if not re.match(r"^[a-zA-Z0-9_-]+$", job_id) or not is_safe_filename(clean_filename):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid request parameters.",
         )
 
-    target_file = (TOOLKIT_TEMP_DIR / job_id / filename).resolve()
-    base_dir = TOOLKIT_TEMP_DIR.resolve()
+    job_base_dir = (TOOLKIT_TEMP_DIR / job_id).resolve()
+    target_file = (job_base_dir / clean_filename).resolve()
 
     if (
-        not str(target_file).startswith(str(base_dir))
+        not str(target_file).startswith(str(job_base_dir))
         or not target_file.exists()
         or not target_file.is_file()
     ):
@@ -784,7 +621,7 @@ async def download_processed_file(
 
     return FileResponse(
         path=target_file,
-        filename=filename,
+        filename=clean_filename,
         media_type=media_type,
         headers={
             "Cache-Control": "private, no-store, max-age=0, must-revalidate",
@@ -803,19 +640,20 @@ async def preview_processed_file(
     current_user: User = Depends(get_current_user),
 ) -> FileResponse:
     """Inline preview of generated cropped card image or PDF."""
-    if not re.match(r"^[a-zA-Z0-9_-]+$", job_id) or not re.match(
-        r"^[a-zA-Z0-9._-]+$", filename
-    ):
+    import urllib.parse
+
+    clean_filename = urllib.parse.unquote(filename)
+    if not re.match(r"^[a-zA-Z0-9_-]+$", job_id) or not is_safe_filename(clean_filename):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid request parameters.",
         )
 
-    target_file = (TOOLKIT_TEMP_DIR / job_id / filename).resolve()
-    base_dir = TOOLKIT_TEMP_DIR.resolve()
+    job_base_dir = (TOOLKIT_TEMP_DIR / job_id).resolve()
+    target_file = (job_base_dir / clean_filename).resolve()
 
     if (
-        not str(target_file).startswith(str(base_dir))
+        not str(target_file).startswith(str(job_base_dir))
         or not target_file.exists()
         or not target_file.is_file()
     ):

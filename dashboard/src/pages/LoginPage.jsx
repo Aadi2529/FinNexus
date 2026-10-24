@@ -32,6 +32,24 @@ export default function LoginPage() {
 
   const searchParams = new URLSearchParams(location.search);
   const redirectUrl = searchParams.get("redirect") || location.state?.from?.pathname || "/";
+  const reason = searchParams.get("reason");
+
+  const getSessionNotice = () => {
+    if (reason === "inactivity") {
+      return "Your session has expired due to 15 minutes of inactivity. Please log in again.";
+    }
+    if (reason === "absolute_timeout") {
+      return "Your session has reached the 8-hour maximum limit. Please sign in again.";
+    }
+    if (reason === "remote_logout") {
+      return "You have signed out from another tab or window.";
+    }
+    if (reason === "expired") {
+      return "Your session has expired. Please log in to continue.";
+    }
+    return null;
+  };
+  const sessionNotice = getSessionNotice();
 
   // Prevent open redirect vulnerabilities by strictly allowlisting valid application origins
   const isAllowedOrigin = (urlStr) => {
@@ -200,6 +218,14 @@ export default function LoginPage() {
                 Enter your enterprise credentials to access your permitted workspace.
               </p>
             </div>
+
+            {/* Session notice */}
+            {sessionNotice && !errorMessage && (
+              <div className="mb-5 p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2.5 text-xs text-amber-800">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>{sessionNotice}</span>
+              </div>
+            )}
 
             {/* Error alert */}
             {errorMessage && (
