@@ -67,10 +67,13 @@ class RateLimiter:
 
     async def _check_rate_limit(self, key: str, now: float) -> bool:
         """Check and record request using Redis or in-memory fallback."""
-        # Try Redis first
-        try:
-            from app.core.redis import get_redis_client
+        from app.core.redis import get_redis_client, is_redis_available, record_redis_failure, record_redis_success
 
+        if not is_redis_available():
+            return self._check_memory_rate_limit(key, now)
+
+        # Try Redis
+        try:
             redis_client = await get_redis_client()
             pipe = redis_client.pipeline()
             pipe.incr(key)
@@ -82,12 +85,12 @@ class RateLimiter:
             if ttl == -1 or ttl is None:
                 await redis_client.expire(key, self.window_seconds)
 
-            await redis_client.aclose()
-
+            record_redis_success()
             if count > self.max_requests:
                 return False
             return True
         except Exception:
+            record_redis_failure()
             # Fallback to local memory sliding-window store
             return self._check_memory_rate_limit(key, now)
 

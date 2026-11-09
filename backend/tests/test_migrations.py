@@ -34,7 +34,48 @@ def test_migration_revision_discovery():
     head_rev = script.get_current_head()
 
     assert head_rev is not None
-    assert head_rev == "8e2fcff76c27"
+    assert head_rev == "c6d7e8f9a0b1"
+
+    restructure_rev = script.get_revision("c6d7e8f9a0b1")
+    assert restructure_rev is not None
+    assert restructure_rev.down_revision == "b5c6d7e8f9a0"
+    assert "commission" in restructure_rev.doc.lower()
+
+    issue_date_rev = script.get_revision("b5c6d7e8f9a0")
+    assert issue_date_rev is not None
+    assert issue_date_rev.down_revision == "a4b5c6d7e8f9"
+    assert "issue_date" in issue_date_rev.doc
+
+    renewal_rev = script.get_revision("a4b5c6d7e8f9")
+    assert renewal_rev is not None
+    assert renewal_rev.down_revision == "f3b4c5d6e7f8"
+    assert "previous_policy_id" in renewal_rev.doc
+
+    hist_rev = script.get_revision("f3b4c5d6e7f8")
+    assert hist_rev is not None
+    assert hist_rev.down_revision == "e1f2a3b4c5d6"
+    assert "histories" in hist_rev.doc
+
+    years_rev = script.get_revision("e1f2a3b4c5d6")
+    assert years_rev is not None
+    assert years_rev.down_revision == "d0e1f2a3b4c5"
+
+    nominee_rev = script.get_revision("c3d4e5f6a7b8")
+    assert nominee_rev is not None
+    assert nominee_rev.down_revision == "b2c3d4e5f6a7"
+    assert "nominees" in nominee_rev.doc
+
+    cust_rev = script.get_revision("b2c3d4e5f6a7")
+    assert cust_rev is not None
+    assert cust_rev.down_revision == "a1b2c3d4e5f6"
+
+    co_plan_rev = script.get_revision("a1b2c3d4e5f6")
+    assert co_plan_rev is not None
+    assert co_plan_rev.down_revision == "e4c8b1a72d3f"
+
+    phase1_rev = script.get_revision("9f3ada871d38")
+    assert phase1_rev is not None
+    assert phase1_rev.down_revision == "8e2fcff76c27"
 
     initial_rev = script.get_revision("fad623e5f3cb")
     assert initial_rev is not None
@@ -51,10 +92,15 @@ def test_migration_revision_discovery():
     assert archival_rev.down_revision == "6c0faee54a05"
     assert "add_client_archival_and_manager_role" in archival_rev.doc
 
+    scheduling_rev = script.get_revision("8e2fcff76c27")
+    assert scheduling_rev is not None
+    assert scheduling_rev.down_revision == "7d1ebff65b16"
+    assert "add_work_order_scheduling_and_reminders" in scheduling_rev.doc
+
     head_rev_item = script.get_revision(head_rev)
     assert head_rev_item is not None
-    assert head_rev_item.down_revision == "7d1ebff65b16"
-    assert "add_work_order_scheduling_and_reminders" in head_rev_item.doc
+    assert head_rev_item.down_revision == "b5c6d7e8f9a0"
+    assert "commission" in head_rev_item.doc.lower()
 
 
 def test_alembic_offline_sql_generation(capsys):
@@ -76,13 +122,20 @@ def test_alembic_offline_sql_generation(capsys):
     assert "CREATE TABLE tasks" in sql_upgrade
     assert "CREATE TABLE documents" in sql_upgrade
     assert "CREATE TABLE audit_logs" in sql_upgrade
+    assert "CREATE TABLE insurance_companies" in sql_upgrade
+    assert "CREATE TABLE insurance_plans" in sql_upgrade
+    assert "CREATE TABLE insurance_purchase_parties" in sql_upgrade
     assert "fad623e5f3cb" in sql_upgrade
+    assert "9f3ada871d38" in sql_upgrade
 
     # Compile downgrade SQL statically
     downgrade(cfg, "head:base", sql=True)
     captured_down = capsys.readouterr()
     sql_downgrade = captured_down.out
 
+    assert "DROP TABLE insurance_purchase_parties" in sql_downgrade
+    assert "DROP TABLE insurance_plans" in sql_downgrade
+    assert "DROP TABLE insurance_companies" in sql_downgrade
     assert "DROP TABLE audit_logs" in sql_downgrade
     assert "DROP TABLE documents" in sql_downgrade
     assert "DROP TABLE tasks" in sql_downgrade

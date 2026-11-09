@@ -172,12 +172,14 @@ async def blacklist_token_jti(jti: str, expires_at_timestamp: float) -> None:
 
     # Try storing in Redis if available
     try:
-        from app.core.redis import get_redis_client
+        from app.core.redis import get_redis_client, is_redis_available, record_redis_failure, record_redis_success
 
-        redis_client = await get_redis_client()
-        await redis_client.setex(f"blacklist:{jti}", ttl, "revoked")
-        await redis_client.aclose()
+        if is_redis_available():
+            redis_client = await get_redis_client()
+            await redis_client.setex(f"blacklist:{jti}", ttl, "revoked")
+            record_redis_success()
     except Exception as exc:
+        record_redis_failure()
         logger.debug("Redis blacklist write skipped (offline): %s", exc)
 
 
@@ -192,14 +194,16 @@ async def is_token_jti_blacklisted(jti: str) -> bool:
                 del _local_blacklist[jti]
 
     try:
-        from app.core.redis import get_redis_client
+        from app.core.redis import get_redis_client, is_redis_available, record_redis_failure, record_redis_success
 
-        redis_client = await get_redis_client()
-        val = await redis_client.get(f"blacklist:{jti}")
-        await redis_client.aclose()
-        if val is not None:
-            return True
+        if is_redis_available():
+            redis_client = await get_redis_client()
+            val = await redis_client.get(f"blacklist:{jti}")
+            record_redis_success()
+            if val is not None:
+                return True
     except Exception as exc:
+        record_redis_failure()
         logger.debug("Redis blacklist read skipped (offline): %s", exc)
 
     return False

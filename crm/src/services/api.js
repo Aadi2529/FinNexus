@@ -128,11 +128,23 @@ function subscribeTokenRefresh(cb) {
 }
 
 function onRefreshed(token) {
-  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers.forEach((cb) => cb(token, null));
   refreshSubscribers = [];
 }
 
-async function request(endpoint, options = {}) {
+function onRefreshFailed(error) {
+  refreshSubscribers.forEach((cb) => cb(null, error));
+  refreshSubscribers = [];
+}
+
+// In-flight deduplication cache for parallel GET requests
+const inFlightGetRequests = new Map();
+
+/**
+ * Execute HTTP request against backend with automatic Bearer token injection,
+ * in-flight GET request deduplication, 15-second timeout, and non-hanging refresh recovery.
+ */
+async function rawRequest(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 
   const token = tokenStorage.getAccessToken();
@@ -148,15 +160,38 @@ async function request(endpoint, options = {}) {
     body = JSON.stringify(body);
   }
 
+  // Setup 15s timeout with optional caller signal combination
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs || 15000;
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error("Request timed out. Server is taking too long to respond."));
+  }, timeoutMs);
+
+  if (options.signal) {
+    if (options.signal.aborted) {
+      clearTimeout(timeoutId);
+      return { success: false, ok: false, status: 0, error: "Request aborted." };
+    }
+    options.signal.addEventListener("abort", () => controller.abort(options.signal.reason), { once: true });
+  }
+
   try {
     let response = await fetch(url, {
       ...options,
       headers,
       body,
       credentials: "include",
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
-    if (response.status === 401 && !endpoint.includes("/auth/login") && !endpoint.includes("/auth/refresh") && !endpoint.includes("/auth/session")) {
+    // Handle token expiration & automatic rotation (via refresh token in session storage or cookie)
+    if (
+      response.status === 401 &&
+      !endpoint.includes("/auth/login") &&
+      !endpoint.includes("/auth/refresh") &&
+      !endpoint.includes("/auth/session")
+    ) {
       const refreshToken = tokenStorage.getRefreshToken();
 
       if (!isRefreshing) {
@@ -175,28 +210,42 @@ async function request(endpoint, options = {}) {
             isRefreshing = false;
             onRefreshed(data.access_token);
 
+            // Retry original request with fresh token
             headers["Authorization"] = `Bearer ${data.access_token}`;
             response = await fetch(url, { ...options, headers, body, credentials: "include" });
           } else {
             isRefreshing = false;
             tokenStorage.clear();
-            return { success: false, status: 401, error: "Session expired" };
+            onRefreshFailed("Session expired. Please sign in again.");
+            return { success: false, ok: false, status: 401, error: "Session expired. Please sign in again." };
           }
-        } catch {
+        } catch (refreshErr) {
           isRefreshing = false;
           tokenStorage.clear();
-          return { success: false, status: 401, error: "Session revalidation failed" };
+          onRefreshFailed(refreshErr.message || "Session revalidation failed.");
+          return { success: false, ok: false, status: 401, error: "Session revalidation failed." };
         }
       } else {
+        // Wait for existing refresh operation to resolve
         return new Promise((resolve) => {
-          subscribeTokenRefresh(async (newToken) => {
+          subscribeTokenRefresh(async (newToken, refreshErr) => {
+            if (refreshErr || !newToken) {
+              resolve({
+                success: false,
+                ok: false,
+                status: 401,
+                error: refreshErr || "Session expired. Please sign in again.",
+              });
+              return;
+            }
             headers["Authorization"] = `Bearer ${newToken}`;
             try {
               const retryRes = await fetch(url, { ...options, headers, body, credentials: "include" });
-              const retryData = await retryRes.json();
-              resolve({ success: retryRes.ok, status: retryRes.status, data: retryData });
+              const contentType = retryRes.headers.get("content-type");
+              const retryData = contentType && contentType.includes("application/json") ? await retryRes.json() : await retryRes.text();
+              resolve({ success: retryRes.ok, ok: retryRes.ok, status: retryRes.status, data: retryData });
             } catch (err) {
-              resolve({ success: false, error: err.message });
+              resolve({ success: false, ok: false, status: 0, error: err.message || "Failed after session refresh." });
             }
           });
         });
@@ -219,19 +268,45 @@ async function request(endpoint, options = {}) {
         } else if (data.message) {
           errorMsg = data.message;
         }
+      } else if (typeof data === "string" && data.trim()) {
+        errorMsg = data;
       }
       return { success: false, ok: false, status: response.status, error: errorMsg, raw: data };
     }
 
     return { success: true, ok: true, status: response.status, data };
   } catch (err) {
+    clearTimeout(timeoutId);
+    let friendlyError = "Unable to connect to FinNexus server (localhost:8000). Please check backend status.";
+    if (err.name === "AbortError") {
+      friendlyError = "Request timed out after 15s. The server is taking too long to respond.";
+    } else if (err.message && !err.message.includes("Failed to fetch")) {
+      friendlyError = err.message;
+    }
     return {
       success: false,
       ok: false,
       status: 0,
-      error: err.message || "Network error. Please verify the backend is running.",
+      error: friendlyError,
     };
   }
+}
+
+async function request(endpoint, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  // Only deduplicate read-only GET requests that do not specify skipDeduplication
+  if (method === "GET" && !options.skipDeduplication && !options.body) {
+    const dedupeKey = `${endpoint}`;
+    if (inFlightGetRequests.has(dedupeKey)) {
+      return inFlightGetRequests.get(dedupeKey);
+    }
+    const reqPromise = rawRequest(endpoint, options).finally(() => {
+      inFlightGetRequests.delete(dedupeKey);
+    });
+    inFlightGetRequests.set(dedupeKey, reqPromise);
+    return reqPromise;
+  }
+  return rawRequest(endpoint, options);
 }
 
 async function crmRequest(endpoint, options = {}) {

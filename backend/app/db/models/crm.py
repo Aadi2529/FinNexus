@@ -43,21 +43,113 @@ class Customer(Base):
         String(100),
         nullable=False,
     )
-    email: Mapped[str] = mapped_column(
+    email: Mapped[str | None] = mapped_column(
         String(255),
         unique=True,
         index=True,
-        nullable=False,
+        nullable=True,
     )
     phone: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
     )
-    pan_number: Mapped[str] = mapped_column(
+    pan_number: Mapped[str | None] = mapped_column(
         String(10),
         unique=True,
         index=True,
-        nullable=False,
+        nullable=True,
+    )
+    gender: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    date_of_birth: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
+    anniversary_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
+    state: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    city: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    address: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    pincode: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    customer_type: Mapped[str | None] = mapped_column(
+        String(50),
+        default="INDIVIDUAL",
+        nullable=True,
+    )
+    # KYC Encryption & Privacy Fields
+    aadhaar_encrypted: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    aadhaar_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        index=True,
+        nullable=True,
+    )
+    pan_encrypted: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    # Individual Customer Demographics & Financial Profile
+    marital_status: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+    nationality: Mapped[str | None] = mapped_column(
+        String(50),
+        default="Indian",
+        nullable=True,
+    )
+    occupation: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    source_of_income: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    # Corporate Client Management Fields
+    company_name: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
+    corporate_code: Mapped[str | None] = mapped_column(
+        String(50),
+        index=True,
+        nullable=True,
+    )
+    gstin: Mapped[str | None] = mapped_column(
+        String(15),
+        index=True,
+        nullable=True,
+    )
+    contact_person_name: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+    contact_person_phone: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+    contact_person_email: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
     )
     pipeline_status: Mapped[str] = mapped_column(
         String(40),
@@ -101,6 +193,13 @@ class Customer(Base):
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+    @property
+    def full_name(self) -> str:
+        """Helper property to return customer full name or corporate entity name."""
+        if self.customer_type == "CORPORATE" and self.company_name:
+            return self.company_name.strip()
+        return f"{self.first_name} {self.last_name}".strip()
 
     # Relationships
     created_by: Mapped[User | None] = relationship(

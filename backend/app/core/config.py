@@ -1,10 +1,15 @@
 """Application configuration managed through Pydantic Settings."""
 
 import json
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_CONFIG_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _CONFIG_DIR.parent.parent
+_PROJECT_DIR = _BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -31,10 +36,10 @@ class Settings(BaseSettings):
 
     # Database URLs (can be provided directly or auto-derived from DB_* above)
     DATABASE_URL: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/financeflow_dev"
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/finnexus_db"
     )
     SYNC_DATABASE_URL: str = (
-        "postgresql+psycopg://postgres:postgres@localhost:5432/financeflow_dev"
+        "postgresql+psycopg://postgres:postgres@localhost:5432/finnexus_db"
     )
 
     # Individual Redis Configuration Variables
@@ -91,7 +96,11 @@ class Settings(BaseSettings):
     REDIS_HEALTH_TIMEOUT: float = 3.0
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(
+            _PROJECT_DIR / ".env",
+            _BACKEND_DIR / ".env",
+            ".env",
+        ),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

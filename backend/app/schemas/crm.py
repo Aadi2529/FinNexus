@@ -52,9 +52,9 @@ class CustomerSummary(BaseModel):
     id: uuid.UUID
     first_name: str
     last_name: str
-    email: str
+    email: str | None = None
     phone: str
-    pan_number: str
+    pan_number: str | None = None
     pipeline_status: str
     reference_source: str | None = None
     is_archived: bool = False
@@ -100,9 +100,9 @@ class ClientAutocompleteItem(BaseModel):
 
     id: uuid.UUID
     full_name: str
-    email: str
+    email: str | None = None
     phone: str
-    pan_number: str
+    pan_number: str | None = None
     reference_source: str | None = None
     is_archived: bool = False
     active_work_orders_count: int = 0

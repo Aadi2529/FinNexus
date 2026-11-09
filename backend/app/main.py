@@ -18,8 +18,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     # Shutdown: Clean up connections if open
     from app.db.session import engine
+    from app.core.redis import close_redis
 
     await engine.dispose()
+    await close_redis()
 
 
 def create_application() -> FastAPI:

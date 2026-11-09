@@ -27,11 +27,12 @@ from app.db.cleanup import execute_demo_data_cleanup
 from app.db.models.auth import RefreshToken, Role, User, UserRole
 from app.db.models.crm import Customer, WorkCategory, WorkOrder, WorkOrderChecklistItem
 from app.db.seed import seed_demo_fixtures, seed_initial_data
+from app.core.config import settings
 from app.db.session import Base, get_db_session
 from app.main import app
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-SUPER_ADMIN_EMAIL = "admin@financeflow.com"
+SUPER_ADMIN_EMAIL = getattr(settings, "SUPER_ADMIN_EMAIL", "admin@finnexus.com") or "admin@finnexus.com"
 SUPER_ADMIN_PWD = "Admin@12345"
 
 
@@ -81,7 +82,7 @@ async def test_clean_baseline_has_only_super_admin(test_session: AsyncSession):
     # Must contain exactly 1 verified Super Admin user
     assert len(all_users) == 1
     admin_user = all_users[0]
-    assert admin_user.email == "admin@financeflow.com"
+    assert admin_user.email == SUPER_ADMIN_EMAIL
     assert admin_user.is_active is True
 
     # Must have SUPER_ADMIN role
@@ -108,19 +109,19 @@ async def test_super_admin_login_and_invalid_credentials(client: AsyncClient):
     # 1. Valid login
     login_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     assert login_res.status_code == 200
     login_data = login_res.json()
     assert "access_token" in login_data
     assert "refresh_token" in login_data
-    assert login_data["user"]["email"] == "admin@financeflow.com"
+    assert login_data["user"]["email"] == SUPER_ADMIN_EMAIL
     assert login_data["user"]["role"] == "SUPER_ADMIN"
 
     # 2. Invalid password
     bad_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": "WrongPassword999!"},
+        json={"email": SUPER_ADMIN_EMAIL, "password": "WrongPassword999!"},
     )
     assert bad_res.status_code == 401
 
@@ -138,7 +139,7 @@ async def test_super_admin_provisions_admin_manager_employee(client: AsyncClient
     # Authenticate as Super Admin
     auth_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     token = auth_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -195,7 +196,7 @@ async def test_created_users_can_authenticate_independently(client: AsyncClient)
     # Super Admin logs in to create an employee
     sa_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     sa_token = sa_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {sa_token}"}
@@ -232,7 +233,7 @@ async def test_duplicate_email_and_weak_password_rejected(client: AsyncClient):
     """Verify registration rejects duplicate email and passwords that lack complexity."""
     sa_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     sa_token = sa_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {sa_token}"}
@@ -241,7 +242,7 @@ async def test_duplicate_email_and_weak_password_rejected(client: AsyncClient):
     dup_res = await client.post(
         "/api/v1/auth/register",
         json={
-            "email": "admin@financeflow.com",
+            "email": SUPER_ADMIN_EMAIL,
             "password": "AnotherPassword123!",
             "full_name": "Fake Admin",
             "role": "ADMIN",
@@ -270,7 +271,7 @@ async def test_employee_cannot_manage_users(client: AsyncClient):
     # Create employee as Super Admin
     sa_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     sa_token = sa_res.json()["access_token"]
     await client.post(
@@ -316,7 +317,7 @@ async def test_deactivate_user_revokes_tokens_and_blocks_login(client: AsyncClie
     # 1. Create and log in a manager
     sa_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     sa_token = sa_res.json()["access_token"]
     sa_headers = {"Authorization": f"Bearer {sa_token}"}
@@ -385,7 +386,7 @@ async def test_cannot_deactivate_or_delete_last_super_admin(client: AsyncClient)
     """Verify safety guards protect the last remaining Super Admin."""
     sa_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     sa_token = sa_res.json()["access_token"]
     sa_id = sa_res.json()["user"]["id"]
@@ -422,13 +423,13 @@ async def test_demo_data_cleanup_execution(test_session: AsyncSession):
     # Execute transactional cleanup
     result = await execute_demo_data_cleanup(test_session)
     assert result["status"] == "completed"
-    assert result["super_admin_preserved"] == "admin@financeflow.com"
+    assert result["super_admin_preserved"] == SUPER_ADMIN_EMAIL
     assert result["deleted_users"] >= 1
 
     # Verify only verified Super Admin remains
     remaining_users = (await test_session.execute(select(User))).scalars().all()
     assert len(remaining_users) == 1
-    assert remaining_users[0].email == "admin@financeflow.com"
+    assert remaining_users[0].email == SUPER_ADMIN_EMAIL
 
     # Verify cleanup is idempotent (running it again does not error or delete Super Admin)
     idempotent_result = await execute_demo_data_cleanup(test_session)
@@ -437,7 +438,7 @@ async def test_demo_data_cleanup_execution(test_session: AsyncSession):
 
     recheck_users = (await test_session.execute(select(User))).scalars().all()
     assert len(recheck_users) == 1
-    assert recheck_users[0].email == "admin@financeflow.com"
+    assert recheck_users[0].email == SUPER_ADMIN_EMAIL
 
 
 @pytest.mark.asyncio
@@ -446,7 +447,7 @@ async def test_work_order_creation_with_canonical_categories(client: AsyncClient
     # Authenticate as Super Admin
     sa_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     sa_token = sa_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {sa_token}"}
@@ -511,7 +512,7 @@ async def test_followup_task_crud_lifecycle(client: AsyncClient, test_session: A
     # Authenticate as Super Admin
     login_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -618,7 +619,7 @@ async def test_work_category_crud_super_admin(client: AsyncClient):
     """Verify Super Admin can Create, Read, Update, and Delete work categories."""
     login_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -682,7 +683,7 @@ async def test_work_order_delete_super_admin(client: AsyncClient, test_session: 
     """Verify Super Admin can permanently delete a work order."""
     login_res = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@financeflow.com", "password": SUPER_ADMIN_PWD},
+        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PWD},
     )
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
